@@ -25,16 +25,16 @@
 DSH Desktop packages the local DeepSeek Harness web experience as a desktop application. It launches a local Harness instance automatically, manages a random loopback port, persists profiles, plugins, and sessions, and opens the full interface as soon as Harness is ready. Project workspaces are added and managed entirely in the Harness interface.
 
 > [!IMPORTANT]
-> DSH Desktop is currently an early preview and depends on the rapidly evolving `@deepseek-ai/dsh@0.1.0-rc.6`. Current builds are not code-signed or notarized by Apple and are not recommended for production use.
+> DSH Desktop is currently an early preview and depends on the rapidly evolving `@deepseek-ai/dsh@0.1.0-rc.6`. The macOS Apple Silicon release is code-signed and notarized by Apple; packages for other platforms are coming soon.
 
 ## Download
 
 | Platform | Package | Download |
 | --- | --- | --- |
 | macOS Apple Silicon | DMG installer | [Download for Apple Silicon](https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-mac-arm64.dmg) |
-| macOS Intel | DMG installer | [Download for Intel Mac](https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-mac-x64.dmg) |
-| Windows x64 | Setup installer | [Download Windows installer](https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-windows-x64-setup.exe) |
-| Windows x64 | Portable executable | [Download portable version](https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-windows-x64-portable.exe) |
+| macOS Intel | DMG installer | Coming soon |
+| Windows x64 | Setup installer | Coming soon |
+| Windows x64 | Portable executable | Coming soon |
 
 All current and historical packages are available on the [GitHub Releases page](https://github.com/dataelement/dsh-desktop/releases).
 
@@ -153,11 +153,11 @@ build/                Application icon assets
 
 ## Current validation status
 
-- macOS Apple Silicon: development workflow, real Harness startup, DMG/ZIP packaging, and mounted artifacts verified
+- macOS Apple Silicon: development workflow, real Harness startup, DMG packaging, code signing, Apple notarization, and mounted artifact verified
 - macOS Intel: packaging configuration and platform checks provided; runtime verification still requires an Intel Mac or runner
 - Windows x64: NSIS/Portable configuration and platform checks provided; runtime verification still requires a Windows runner
 - Windows ARM64: not currently supported
-- Code signing, Apple notarization, and automatic updates: not yet integrated
+- Automatic updates: not yet integrated
 
 ## Upstream version and patches
 

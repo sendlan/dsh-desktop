@@ -25,16 +25,16 @@
 DSH Desktop 把 DeepSeek Harness 的本地 Web 体验封装为桌面应用：应用会自动启动本地 Harness、管理随机回环端口、持久化 Profile/插件/会话，并在 Harness 就绪后直接进入完整界面。项目工作区在 Harness 界面中统一添加和管理。
 
 > [!IMPORTANT]
-> DSH Desktop 当前处于早期预览阶段，并依赖仍在快速迭代的 `@deepseek-ai/dsh@0.1.0-rc.6`。当前构建尚未代码签名或 Apple 公证，不建议直接用于生产环境。
+> DSH Desktop 当前处于早期预览阶段，并依赖仍在快速迭代的 `@deepseek-ai/dsh@0.1.0-rc.6`。macOS Apple Silicon 正式包已完成代码签名并通过 Apple 公证，其他平台安装包即将发布。
 
 ## 下载安装
 
 | 平台 | 安装包 | 下载 |
 | --- | --- | --- |
 | macOS Apple Silicon | DMG 安装包 | [下载 Apple 芯片版](https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-mac-arm64.dmg) |
-| macOS Intel | DMG 安装包 | [下载 Intel 芯片版](https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-mac-x64.dmg) |
-| Windows x64 | EXE 安装版 | [下载 Windows 安装版](https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-windows-x64-setup.exe) |
-| Windows x64 | EXE 便携版 | [下载 Windows 便携版](https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-windows-x64-portable.exe) |
+| macOS Intel | DMG 安装包 | 即将发布 |
+| Windows x64 | EXE 安装版 | 即将发布 |
+| Windows x64 | EXE 便携版 | 即将发布 |
 
 所有当前及历史版本可以在 [GitHub Releases 页面](https://github.com/dataelement/dsh-desktop/releases)查看。
 
@@ -153,11 +153,11 @@ build/                应用图标资源
 
 ## 当前验证状态
 
-- macOS Apple Silicon：开发运行、真实 Harness 启动、DMG/ZIP 打包与挂载已验证
+- macOS Apple Silicon：开发运行、真实 Harness 启动、DMG 打包、代码签名、Apple 公证与挂载验证均已完成
 - macOS Intel：打包配置与平台检查已提供，需要在 Intel Mac/Runner 上完成运行验证
 - Windows x64：NSIS/Portable 配置与平台检查已提供，需要在 Windows/Runner 上完成运行验证
 - Windows ARM64：当前不支持
-- 代码签名、Apple 公证与自动更新：尚未接入
+- 自动更新：尚未接入
 
 ## 上游版本与补丁
 
