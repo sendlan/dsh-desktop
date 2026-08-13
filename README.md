@@ -1,3 +1,5 @@
+![DSH Desktop model provider setup](docs/images/model-provider-onboarding.png)
+
 <p align="center">
   <img src="build/icon.png" width="144" alt="DSH Desktop logo" />
 </p>
