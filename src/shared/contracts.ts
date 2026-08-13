@@ -8,7 +8,7 @@ export type RuntimePhase =
 export interface RuntimeSnapshot {
   phase: RuntimePhase
   message: string
-  workspace?: string
+  launchDirectory?: string
   logs: string[]
   url?: string
 }

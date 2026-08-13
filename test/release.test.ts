@@ -12,6 +12,25 @@ const releaseAssets = [
 ]
 
 describe('GitHub release contract', () => {
+  it('declares required DSH peer packages as production dependencies', async () => {
+    const packageLock = JSON.parse(
+      await readFile(path.join(projectRoot, 'package-lock.json'), 'utf8')
+    ) as {
+      packages: Record<string, { dev?: boolean; peer?: boolean }>
+    }
+
+    const peerOnlyRuntimePackages = Object.entries(packageLock.packages)
+      .filter(
+        ([location, metadata]) =>
+          location.startsWith('node_modules/@deepseek-ai/') &&
+          metadata.peer === true &&
+          metadata.dev !== true
+      )
+      .map(([location]) => location.replace('node_modules/', ''))
+
+    expect(peerOnlyRuntimePackages).toEqual([])
+  })
+
   it('uses stable platform-specific artifact names', async () => {
     const packageJson = JSON.parse(
       await readFile(path.join(projectRoot, 'package.json'), 'utf8')

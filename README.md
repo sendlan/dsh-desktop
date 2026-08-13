@@ -22,7 +22,7 @@
 
 <p align="center"><strong>Beyond official DeepSeek models, DSH Desktop supports mainstream third-party model providers.</strong></p>
 
-DSH Desktop packages the local DeepSeek Harness web experience as a desktop application. Choose a workspace and the app launches a local Harness instance, manages a random loopback port, persists profiles, plugins, and sessions, and opens the full interface as soon as Harness is ready.
+DSH Desktop packages the local DeepSeek Harness web experience as a desktop application. It launches a local Harness instance automatically, manages a random loopback port, persists profiles, plugins, and sessions, and opens the full interface as soon as Harness is ready. Project workspaces are added and managed entirely in the Harness interface.
 
 > [!IMPORTANT]
 > DSH Desktop is currently an early preview and depends on the rapidly evolving `@deepseek-ai/dsh@0.1.0-rc.6`. Current builds are not code-signed or notarized by Apple and are not recommended for production use.
@@ -43,7 +43,8 @@ All current and historical packages are available on the [GitHub Releases page](
 DeepSeek Harness already provides a complete agent runtime and Web UI. DSH Desktop does not reimplement Harness; it supplies the host capabilities needed for a desktop product:
 
 - Run without manually starting a CLI or managing local ports
-- Open workspaces with the native system directory picker and remember recent directories
+- Create an application-owned Harness launch directory automatically at startup
+- Add and manage project workspaces through Harness's built-in directory picker
 - Manage the Harness child process, readiness checks, logs, and shutdown in one place
 - Store profiles, plugins, and sessions outside the application installation directory so upgrades do not remove user data
 - Provide packaging entry points for macOS and Windows
@@ -51,9 +52,9 @@ DeepSeek Harness already provides a complete agent runtime and Web UI. DSH Deskt
 ## Features
 
 - Opens directly into Harness without an additional landing page
-- Prompts for a workspace on first launch and automatically restores the most recent workspace afterward
-- Offers retry, workspace switching, log viewing, and exit actions when Harness fails to start
-- Provides Workspace menu actions for opening a workspace, selecting a recent workspace, and restarting Harness
+- Starts without an initial directory prompt by creating and reusing an internal launch directory
+- Offers retry, log viewing, and exit actions when Harness fails to start
+- Provides Harness menu actions for restarting the child process and viewing its log
 - Gracefully terminates the Harness child process when the desktop app exits
 - Listens only on a random `127.0.0.1` port for each launch
 - Removes Node.js privileges from the renderer and enables `contextIsolation`, sandboxing, and navigation restrictions
@@ -121,7 +122,7 @@ Harness includes architecture-specific native modules. Dependencies must be rein
 
 ```text
 DSH Desktop (Electron Main)
-├── Native workspace picker and recent workspaces
+├── Application-owned launch directory
 ├── Harness child-process lifecycle
 ├── Random loopback port and readiness checks
 ├── Native logging and recovery actions
@@ -129,7 +130,7 @@ DSH Desktop (Electron Main)
      └── http://127.0.0.1:<random>  DeepSeek Harness Web UI
 
 Electron userData
-├── desktop-settings.json
+├── launch-root/
 ├── logs/harness.log
 └── harness/
     ├── profiles/

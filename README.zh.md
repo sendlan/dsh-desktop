@@ -22,7 +22,7 @@
 
 <p align="center"><strong>不止 DeepSeek 官方模型，也支持接入主流第三方模型提供方。</strong></p>
 
-DSH Desktop 把 DeepSeek Harness 的本地 Web 体验封装为桌面应用：选择一个工作区，应用会启动本地 Harness、管理随机回环端口、持久化 Profile/插件/会话，并在 Harness 就绪后直接进入完整界面。
+DSH Desktop 把 DeepSeek Harness 的本地 Web 体验封装为桌面应用：应用会自动启动本地 Harness、管理随机回环端口、持久化 Profile/插件/会话，并在 Harness 就绪后直接进入完整界面。项目工作区在 Harness 界面中统一添加和管理。
 
 > [!IMPORTANT]
 > DSH Desktop 当前处于早期预览阶段，并依赖仍在快速迭代的 `@deepseek-ai/dsh@0.1.0-rc.6`。当前构建尚未代码签名或 Apple 公证，不建议直接用于生产环境。
@@ -43,7 +43,8 @@ DSH Desktop 把 DeepSeek Harness 的本地 Web 体验封装为桌面应用：选
 DeepSeek Harness 本身提供完整的 Agent Runtime 与 Web UI。DSH Desktop 不重新实现 Harness，而是补上桌面产品所需的宿主能力：
 
 - 无需手动运行 CLI 或管理本地端口
-- 使用系统目录选择器打开工作区，并记住最近使用的目录
+- 启动时自动创建应用专属的 Harness 启动目录
+- 通过 Harness 内置目录选择器统一添加和管理项目工作区
 - 统一管理 Harness 子进程、启动检测、日志与退出
 - 把 Profile、插件和会话保存在应用安装目录之外，升级应用不丢数据
 - 提供 macOS 与 Windows 安装包构建入口
@@ -51,9 +52,9 @@ DeepSeek Harness 本身提供完整的 Agent Runtime 与 Web UI。DSH Desktop �
 ## 功能
 
 - 启动后直接进入 Harness，不设置额外首页
-- 首次启动选择工作区，后续自动恢复最近工作区
-- Harness 启动失败时支持重试、切换工作区、查看日志或退出
-- Workspace 菜单支持打开工作区、最近工作区与重启 Harness
+- 启动时无需先选择目录，自动创建并复用应用内部启动目录
+- Harness 启动失败时支持重试、查看日志或退出
+- Harness 菜单支持重启子进程与查看日志
 - 退出桌面应用时优雅终止 Harness 子进程
 - 每次启动仅监听随机的 `127.0.0.1` 端口
 - Renderer 关闭 Node.js 权限，启用 `contextIsolation`、sandbox 与导航限制
@@ -121,7 +122,7 @@ Harness 包含架构相关原生模块。macOS ARM64、macOS Intel 与 Windows x
 
 ```text
 DSH Desktop (Electron Main)
-├── 原生工作区选择与最近工作区
+├── 应用专属启动目录
 ├── Harness 子进程生命周期
 ├── 随机回环端口与启动检测
 ├── 原生日志/错误恢复入口
@@ -129,7 +130,7 @@ DSH Desktop (Electron Main)
      └── http://127.0.0.1:<random>  DeepSeek Harness Web UI
 
 Electron userData
-├── desktop-settings.json
+├── launch-root/
 ├── logs/harness.log
 └── harness/
     ├── profiles/

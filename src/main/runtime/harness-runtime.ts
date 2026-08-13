@@ -28,8 +28,8 @@ export class HarnessRuntime {
   private child?: ChildProcessWithoutNullStreams
   private logStream?: WriteStream
   private phase: RuntimePhase = 'idle'
-  private message = 'Select a workspace to begin.'
-  private workspace?: string
+  private message = 'Harness is not running.'
+  private launchDirectory?: string
   private url?: string
   private readonly logLines: string[] = []
 
@@ -39,15 +39,15 @@ export class HarnessRuntime {
     return {
       phase: this.phase,
       message: this.message,
-      workspace: this.workspace,
+      launchDirectory: this.launchDirectory,
       url: this.url,
       logs: [...this.logLines]
     }
   }
 
-  async start(workspace: string): Promise<void> {
+  async start(launchDirectory: string): Promise<void> {
     await this.stop()
-    this.workspace = workspace
+    this.launchDirectory = launchDirectory
     this.url = undefined
 
     if (!existsSync(this.options.dshEntryPath)) {
@@ -65,12 +65,12 @@ export class HarnessRuntime {
     const pathKey = process.platform === 'win32' ? 'Path' : 'PATH'
 
     this.writeLog(`\n[desktop] starting ${new Date().toISOString()}`)
-    this.writeLog(`[desktop] workspace ${workspace}`)
+    this.writeLog(`[desktop] launch directory ${launchDirectory}`)
     this.writeLog(`[desktop] endpoint ${url}`)
     this.setState('starting', 'Starting DeepSeek Harness…')
 
     const child = spawn(this.options.nodeExecutable, args, {
-      cwd: workspace,
+      cwd: launchDirectory,
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: '1',
@@ -118,7 +118,7 @@ export class HarnessRuntime {
     const child = this.child
     if (!child) {
       this.closeLog()
-      if (this.phase !== 'failed') this.setState('idle', 'Select a workspace to begin.')
+      if (this.phase !== 'failed') this.setState('idle', 'Harness is not running.')
       return
     }
 
@@ -127,7 +127,7 @@ export class HarnessRuntime {
     await this.stopChild(child)
     this.closeLog()
     this.url = undefined
-    this.setState('idle', 'Select a workspace to begin.')
+    this.setState('idle', 'Harness is not running.')
   }
 
   private async stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {

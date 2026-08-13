@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   app,
@@ -10,12 +9,12 @@ import {
 } from 'electron'
 import { HarnessRuntime } from './runtime/harness-runtime'
 import { secureWindow } from './security'
-import { AppSettingsStore } from './state/app-settings'
+import { ensureLaunchRoot } from './state/launch-root'
 import type { RuntimeSnapshot } from '../shared/contracts'
 
 let mainWindow: BrowserWindow | undefined
 let runtime: HarnessRuntime
-let settings: AppSettingsStore
+let launchDirectory: string
 let quitting = false
 let failureDialogVisible = false
 
@@ -70,38 +69,14 @@ async function openHarness(url: string): Promise<void> {
   window.focus()
 }
 
-async function launchWorkspace(workspace: string): Promise<void> {
-  if (!existsSync(workspace)) throw new Error(`Workspace does not exist: ${workspace}`)
+async function launchHarness(): Promise<void> {
   mainWindow?.hide()
-  await settings.rememberWorkspace(workspace)
-  installMenu()
-  await runtime.start(workspace)
-}
-
-async function chooseWorkspace(quitWhenCanceled = false): Promise<string | undefined> {
-  const options: Electron.OpenDialogOptions = {
-    title: 'Choose a workspace',
-    properties: ['openDirectory', 'createDirectory']
-  }
-  const result = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, options)
-    : await dialog.showOpenDialog(options)
-  const workspace = result.filePaths[0]
-  if (result.canceled || !workspace) {
-    if (quitWhenCanceled) app.quit()
-    return undefined
-  }
-  await launchWorkspace(workspace)
-  return workspace
+  await runtime.start(launchDirectory)
 }
 
 function showUnexpectedError(error: unknown): void {
   const message = error instanceof Error ? error.stack ?? error.message : String(error)
   dialog.showErrorBox('DSH Desktop encountered an error', message)
-}
-
-function startWorkspaceFromUi(workspace: string): void {
-  void launchWorkspace(workspace).catch(showUnexpectedError)
 }
 
 async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
@@ -114,23 +89,21 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
         type: 'error',
         title: 'Harness could not start',
         message: snapshot.message,
-        detail: snapshot.workspace
-          ? `Workspace: ${snapshot.workspace}\n\nYou can retry, choose another workspace, or inspect the Harness log.`
-          : 'You can retry, choose another workspace, or inspect the Harness log.',
-        buttons: ['Retry', 'Choose Workspace…', 'Show Log', 'Quit'],
+        detail: snapshot.launchDirectory
+          ? `Launch directory: ${snapshot.launchDirectory}\n\nYou can retry or inspect the Harness log.`
+          : 'You can retry or inspect the Harness log.',
+        buttons: ['Retry', 'Show Log', 'Quit'],
         defaultId: 0,
-        cancelId: 3,
+        cancelId: 2,
         noLink: true
       }
       const result = mainWindow
         ? await dialog.showMessageBox(mainWindow, options)
         : await dialog.showMessageBox(options)
 
-      if (result.response === 0 && snapshot.workspace) {
-        await launchWorkspace(snapshot.workspace)
+      if (result.response === 0) {
+        await launchHarness()
       } else if (result.response === 1) {
-        await chooseWorkspace()
-      } else if (result.response === 2) {
         shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
         continue
       } else {
@@ -148,13 +121,6 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
 }
 
 function installMenu(): void {
-  const recentItems: Electron.MenuItemConstructorOptions[] = settings.recentWorkspaces.length
-    ? settings.recentWorkspaces.map((workspace) => ({
-        label: workspace,
-        click: () => startWorkspaceFromUi(workspace)
-      }))
-    : [{ label: 'No Recent Workspaces', enabled: false }]
-
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(process.platform === 'darwin'
       ? [
@@ -173,21 +139,12 @@ function installMenu(): void {
         ]
       : []),
     {
-      label: 'Workspace',
+      label: 'Harness',
       submenu: [
-        {
-          label: 'Open Workspace…',
-          accelerator: 'CmdOrCtrl+O',
-          click: () => void chooseWorkspace().catch(showUnexpectedError)
-        },
-        { label: 'Open Recent', submenu: recentItems },
         {
           label: 'Restart Harness',
           accelerator: 'CmdOrCtrl+Shift+R',
-          click: () => {
-            const workspace = runtime.snapshot().workspace ?? settings.lastWorkspace
-            if (workspace) startWorkspaceFromUi(workspace)
-          }
+          click: () => void launchHarness().catch(showUnexpectedError)
         },
         {
           label: 'Show Harness Log',
@@ -229,8 +186,7 @@ function installMenu(): void {
 }
 
 async function bootstrap(): Promise<void> {
-  settings = new AppSettingsStore(join(app.getPath('userData'), 'desktop-settings.json'))
-  await settings.load()
+  launchDirectory = await ensureLaunchRoot(app.getPath('userData'))
   createWindow()
   runtime = new HarnessRuntime({
     dshEntryPath: dshEntryPath(),
@@ -246,12 +202,7 @@ async function bootstrap(): Promise<void> {
     }
   })
   installMenu()
-
-  if (settings.lastWorkspace) {
-    await launchWorkspace(settings.lastWorkspace)
-  } else {
-    await chooseWorkspace(true)
-  }
+  await launchHarness()
 }
 
 const singleInstance = app.requestSingleInstanceLock()
@@ -274,7 +225,7 @@ if (!singleInstance) {
     if (snapshot?.phase === 'ready' && snapshot.url) {
       void openHarness(snapshot.url).catch(showUnexpectedError)
     } else if (snapshot?.phase === 'idle') {
-      void chooseWorkspace().catch(showUnexpectedError)
+      void launchHarness().catch(showUnexpectedError)
     }
   })
   app.on('window-all-closed', () => {
