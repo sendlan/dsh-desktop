@@ -138,6 +138,11 @@ describe('GitHub release contract', () => {
 
     for (const readme of readmes) {
       expect(readme).toContain('https://www.dshdesktop.com/#download')
+      expect(readme).not.toContain('| Platform | Package | Download |')
+      expect(readme).not.toContain('| 平台 | 安装包 | 下载 |')
+      expect(readme).not.toContain('Coming soon')
+      expect(readme).not.toContain('即将发布')
+      expect(readme).not.toContain('github.com/dataelement/dsh-desktop/releases')
       for (const asset of releaseAssets) {
         expect(readme).not.toContain(`releases/latest/download/${asset}`)
       }

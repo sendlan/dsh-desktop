@@ -25,18 +25,11 @@
 DSH Desktop packages the local DeepSeek Harness web experience as a desktop application. It launches a local Harness instance automatically, manages a random loopback port, persists profiles, plugins, and sessions, and opens the full interface as soon as Harness is ready. Project workspaces are added and managed entirely in the Harness interface.
 
 > [!IMPORTANT]
-> DSH Desktop is currently an early preview and depends on the rapidly evolving `@deepseek-ai/dsh@0.1.0-rc.6`. The macOS Apple Silicon release is code-signed and notarized by Apple; packages for other platforms are coming soon.
+> DSH Desktop is currently an early preview and depends on the rapidly evolving `@deepseek-ai/dsh@0.1.0-rc.6`. macOS releases are code-signed and notarized by Apple; current installers are distributed through the official website.
 
 ## Download
 
-| Platform | Package | Download |
-| --- | --- | --- |
-| macOS Apple Silicon | DMG installer | [Download for Apple Silicon](https://www.dshdesktop.com/#download) |
-| macOS Intel | DMG installer | Coming soon |
-| Windows x64 | Setup installer | Coming soon |
-| Windows x64 | Portable executable | Coming soon |
-
-All current and historical packages are available on the [GitHub Releases page](https://github.com/dataelement/dsh-desktop/releases).
+Download DSH Desktop for macOS and Windows from the [official website](https://www.dshdesktop.com/#download).
 
 ## Why this project exists
 

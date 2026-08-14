@@ -25,18 +25,11 @@
 DSH Desktop 把 DeepSeek Harness 的本地 Web 体验封装为桌面应用：应用会自动启动本地 Harness、管理随机回环端口、持久化 Profile/插件/会话，并在 Harness 就绪后直接进入完整界面。项目工作区在 Harness 界面中统一添加和管理。
 
 > [!IMPORTANT]
-> DSH Desktop 当前处于早期预览阶段，并依赖仍在快速迭代的 `@deepseek-ai/dsh@0.1.0-rc.6`。macOS Apple Silicon 正式包已完成代码签名并通过 Apple 公证，其他平台安装包即将发布。
+> DSH Desktop 当前处于早期预览阶段，并依赖仍在快速迭代的 `@deepseek-ai/dsh@0.1.0-rc.6`。macOS 正式包已完成代码签名并通过 Apple 公证，当前安装包统一通过官网分发。
 
 ## 下载安装
 
-| 平台 | 安装包 | 下载 |
-| --- | --- | --- |
-| macOS Apple Silicon | DMG 安装包 | [下载 Apple 芯片版](https://www.dshdesktop.com/#download) |
-| macOS Intel | DMG 安装包 | 即将发布 |
-| Windows x64 | EXE 安装版 | 即将发布 |
-| Windows x64 | EXE 便携版 | 即将发布 |
-
-所有当前及历史版本可以在 [GitHub Releases 页面](https://github.com/dataelement/dsh-desktop/releases)查看。
+请前往 [DSH Desktop 官网](https://www.dshdesktop.com/#download)下载 macOS 和 Windows 安装包。
 
 ## 为什么做这个项目
 
