@@ -122,10 +122,10 @@ describe('GitHub release contract', () => {
     expect(workflow.match(/CSC_IDENTITY_AUTO_DISCOVERY: 'false'/g)).toHaveLength(2)
     expect(workflow).not.toContain("CSC_LINK: ''")
     expect(workflow).toMatch(
-      /macos-apple-silicon:\n    name: macOS Apple Silicon\n    runs-on: macos-15\n    steps:/
+      /macos-apple-silicon:\r?\n    name: macOS Apple Silicon\r?\n    runs-on: macos-15\r?\n    steps:/
     )
     expect(workflow).toMatch(
-      /macos-intel:\n    name: macOS Intel\n    if: [^\n]+\n    runs-on: macos-15-intel\n    steps:/
+      /macos-intel:\r?\n    name: macOS Intel\r?\n    if: [^\r\n]+\r?\n    runs-on: macos-15-intel\r?\n    steps:/
     )
   })
 
