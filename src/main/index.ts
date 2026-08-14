@@ -4,6 +4,7 @@ import {
   BrowserWindow,
   dialog,
   Menu,
+  nativeTheme,
   shell,
   type MessageBoxOptions
 } from 'electron'
@@ -24,6 +25,42 @@ let launchDirectory: string
 let quitting = false
 let failureDialogVisible = false
 
+async function syncNativeTheme(window: BrowserWindow): Promise<void> {
+  if (window.isDestroyed()) return
+
+  // The traffic-light strip remains dark in both Harness appearances. Harness
+  // exposes its resolved appearance on body[data-ds-dark-theme], which the
+  // sidebar branding follows directly.
+  nativeTheme.themeSource = 'dark'
+  window.setBackgroundColor('#141416')
+  await window.webContents.executeJavaScript(`
+    (() => {
+      if (${process.platform === 'darwin'}) {
+        let style = document.getElementById('dsh-desktop-titlebar-style')
+        if (!style) {
+          style = document.createElement('style')
+          style.id = 'dsh-desktop-titlebar-style'
+          document.head.appendChild(style)
+        }
+        style.textContent = \`
+          html { --dsh-desktop-titlebar-height: 30px; }
+          body { box-sizing: border-box; padding-top: var(--dsh-desktop-titlebar-height); }
+          html::before {
+            content: '';
+            position: fixed;
+            z-index: 2147483647;
+            inset: 0 0 auto 0;
+            height: var(--dsh-desktop-titlebar-height);
+            background: #141416;
+            -webkit-app-region: drag;
+          }
+        \`
+      }
+
+    })()
+  `)
+}
+
 function dshEntryPath(): string {
   if (app.isPackaged) {
     return join(
@@ -42,10 +79,13 @@ function dshEntryPath(): string {
 function desktopIconPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
-    : join(app.getAppPath(), 'build', 'icon.png')
+    : join(app.getAppPath(), 'build', 'app-icon.png')
 }
 
 function createWindow(): BrowserWindow {
+  // Harness restores its own theme after navigation. Start macOS in dark mode so
+  // the native traffic-light strip never flashes light before that state is readable.
+  if (process.platform === 'darwin') nativeTheme.themeSource = 'dark'
   const window = new BrowserWindow({
     width: 1380,
     height: 900,
@@ -54,7 +94,8 @@ function createWindow(): BrowserWindow {
     show: false,
     title: '',
     icon: desktopIconPath(),
-    backgroundColor: '#f8f8f6',
+    frame: process.platform !== 'darwin',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#141416' : '#f8f8f6',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -62,6 +103,10 @@ function createWindow(): BrowserWindow {
       webSecurity: true
     }
   })
+  if (process.platform === 'darwin') {
+    window.setWindowButtonVisibility(true)
+    window.setWindowButtonPosition({ x: 12, y: 9 })
+  }
   window.on('page-title-updated', (event) => {
     event.preventDefault()
     window.setTitle('')
@@ -80,6 +125,7 @@ async function openHarness(url: string): Promise<void> {
     await window.loadURL(url)
   }
   if (runtime.snapshot().url !== url || window.isDestroyed()) return
+  await syncNativeTheme(window)
   if (window.isMinimized()) window.restore()
   window.show()
   window.focus()
