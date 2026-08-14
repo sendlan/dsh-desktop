@@ -1,5 +1,5 @@
 import { shell, type BrowserWindow } from 'electron'
-import { isTrustedAppUrl } from './security-policy'
+import { canGrantWindowPermission, isTrustedAppUrl } from './security-policy'
 
 export function secureWindow(window: BrowserWindow): void {
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -15,7 +15,19 @@ export function secureWindow(window: BrowserWindow): void {
   })
 
   window.webContents.on('will-attach-webview', (event) => event.preventDefault())
-  window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false)
-  })
+  window.webContents.session.setPermissionCheckHandler(
+    (_webContents, permission, requestingOrigin, details) =>
+      canGrantWindowPermission(
+        permission,
+        details.requestingUrl ?? requestingOrigin,
+        details.isMainFrame
+      )
+  )
+  window.webContents.session.setPermissionRequestHandler(
+    (_webContents, permission, callback, details) => {
+      callback(
+        canGrantWindowPermission(permission, details.requestingUrl, details.isMainFrame)
+      )
+    }
+  )
 }

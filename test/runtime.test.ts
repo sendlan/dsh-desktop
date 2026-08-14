@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildHarnessArguments, buildNodeArguments } from '../src/main/runtime/harness-runtime'
-import { isTrustedAppUrl } from '../src/main/security-policy'
+import { canGrantWindowPermission, isTrustedAppUrl } from '../src/main/security-policy'
 import { shouldLoadHarnessUrl } from '../src/main/window-navigation'
 
 describe('Harness launch contract', () => {
@@ -35,6 +35,43 @@ describe('navigation trust boundary', () => {
     expect(isTrustedAppUrl('https://127.0.0.1:43127')).toBe(false)
     expect(isTrustedAppUrl('http://example.com')).toBe(false)
     expect(isTrustedAppUrl('javascript:alert(1)')).toBe(false)
+  })
+
+  it('only grants clipboard writes from the trusted main frame', () => {
+    expect(
+      canGrantWindowPermission(
+        'clipboard-sanitized-write',
+        'http://127.0.0.1:43127/session',
+        true
+      )
+    ).toBe(true)
+    expect(
+      canGrantWindowPermission(
+        'clipboard-sanitized-write',
+        'http://localhost:43127/session',
+        true
+      )
+    ).toBe(true)
+    expect(
+      canGrantWindowPermission('clipboard-read', 'http://127.0.0.1:43127/session', true)
+    ).toBe(false)
+    expect(
+      canGrantWindowPermission(
+        'clipboard-sanitized-write',
+        'http://127.0.0.1:43127/session',
+        false
+      )
+    ).toBe(false)
+    expect(
+      canGrantWindowPermission(
+        'clipboard-sanitized-write',
+        'https://example.com/session',
+        true
+      )
+    ).toBe(false)
+    expect(
+      canGrantWindowPermission('clipboard-sanitized-write', 'file:///tmp/app.html', true)
+    ).toBe(false)
   })
 })
 

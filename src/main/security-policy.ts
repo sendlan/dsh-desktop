@@ -1,7 +1,6 @@
-export function isTrustedAppUrl(rawUrl: string): boolean {
+function isHarnessUrl(rawUrl: string): boolean {
   try {
     const url = new URL(rawUrl)
-    if (url.protocol === 'file:') return true
     return (
       url.protocol === 'http:' &&
       (url.hostname === '127.0.0.1' || url.hostname === 'localhost')
@@ -9,4 +8,26 @@ export function isTrustedAppUrl(rawUrl: string): boolean {
   } catch {
     return false
   }
+}
+
+export function isTrustedAppUrl(rawUrl: string): boolean {
+  try {
+    if (new URL(rawUrl).protocol === 'file:') return true
+  } catch {
+    return false
+  }
+  return isHarnessUrl(rawUrl)
+}
+
+export function canGrantWindowPermission(
+  permission: string,
+  requestingUrl: string | undefined,
+  isMainFrame: boolean
+): boolean {
+  return (
+    permission === 'clipboard-sanitized-write' &&
+    isMainFrame &&
+    requestingUrl !== undefined &&
+    isHarnessUrl(requestingUrl)
+  )
 }
