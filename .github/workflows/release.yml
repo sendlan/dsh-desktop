@@ -94,6 +94,7 @@ jobs:
           fi
           test -z "$SIGNING_KEYCHAIN" || security delete-keychain "$SIGNING_KEYCHAIN" || rm -f "$SIGNING_KEYCHAIN"
           test -z "$SIGNING_CERTIFICATE" || rm -f "$SIGNING_CERTIFICATE"
+          test -z "$APPLE_API_KEY" || rm -f "$APPLE_API_KEY"
       - name: Verify signed and notarized Apple Silicon app
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -190,6 +191,7 @@ jobs:
           fi
           test -z "$SIGNING_KEYCHAIN" || security delete-keychain "$SIGNING_KEYCHAIN" || rm -f "$SIGNING_KEYCHAIN"
           test -z "$SIGNING_CERTIFICATE" || rm -f "$SIGNING_CERTIFICATE"
+          test -z "$APPLE_API_KEY" || rm -f "$APPLE_API_KEY"
       - name: Verify signed and notarized Intel app
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
