@@ -100,6 +100,26 @@ describe('GitHub release contract', () => {
     ).toHaveLength(3)
   })
 
+  it('signs and notarizes both macOS architectures on tag releases', async () => {
+    const workflow = await readFile(
+      path.join(projectRoot, '.github', 'workflows', 'release.yml'),
+      'utf8'
+    )
+
+    for (const secret of [
+      'DESKTOP_CSC_LINK',
+      'DESKTOP_CSC_KEY_PASSWORD',
+      'DESKTOP_APPLE_API_KEY',
+      'DESKTOP_APPLE_API_KEY_ID',
+      'DESKTOP_APPLE_API_ISSUER',
+      'DESKTOP_APPLE_TEAM_ID'
+    ]) {
+      expect(workflow).toContain(`secrets.${secret}`)
+    }
+    expect(workflow.match(/Prepare macOS signing keychain/g)).toHaveLength(2)
+    expect(workflow.match(/xcrun stapler validate/g)).toHaveLength(2)
+  })
+
   it('only links the currently published Apple Silicon package', async () => {
     const readmes = await Promise.all(
       ['README.md', 'README.zh.md'].map((file) =>
