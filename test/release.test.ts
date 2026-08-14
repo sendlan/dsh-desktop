@@ -7,8 +7,7 @@ const projectRoot = path.resolve(import.meta.dirname, '..')
 const releaseAssets = [
   'dsh-desktop-mac-arm64.dmg',
   'dsh-desktop-mac-x64.dmg',
-  'dsh-desktop-windows-x64-setup.exe',
-  'dsh-desktop-windows-x64-portable.exe'
+  'dsh-desktop-windows-x64-setup.exe'
 ]
 
 describe('GitHub release contract', () => {
@@ -50,8 +49,9 @@ describe('GitHub release contract', () => {
       build: {
         artifactName: string
         extraResources: Array<{ from: string; to: string }>
+        win: { target: Array<{ target: string; arch: string[] }> }
         nsis: { artifactName: string }
-        portable: { artifactName: string }
+        portable?: unknown
       }
     }
 
@@ -63,9 +63,8 @@ describe('GitHub release contract', () => {
     expect(packageJson.build.nsis.artifactName).toBe(
       'dsh-desktop-windows-${arch}-setup.${ext}'
     )
-    expect(packageJson.build.portable.artifactName).toBe(
-      'dsh-desktop-windows-${arch}-portable.${ext}'
-    )
+    expect(packageJson.build.win.target).toEqual([{ target: 'nsis', arch: ['x64'] }])
+    expect(packageJson.build.portable).toBeUndefined()
   })
 
   it('keeps builder jobs from attempting implicit tag publishing', async () => {

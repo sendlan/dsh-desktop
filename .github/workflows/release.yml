@@ -266,7 +266,6 @@ jobs:
           name: windows-x64
           path: |
             dist/dsh-desktop-windows-x64-setup.exe
-            dist/dsh-desktop-windows-x64-portable.exe
           if-no-files-found: error
 
   publish:
