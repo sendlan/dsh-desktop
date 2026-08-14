@@ -33,6 +33,14 @@ Download DSH Desktop for macOS and Windows from the [official website](https://w
 
 Installed macOS and Windows builds check for updates automatically after startup and every six hours. Updates download in the background and prompt you to restart when they are ready. You can also choose **Check for Updates…** from the application menu.
 
+## Community
+
+<p align="center">
+  Scan the QR code below with WeChat to join the DSH Desktop community group.<br />
+  <img src="docs/images/wechat-group.jpg" width="220" alt="DSH Desktop WeChat group QR code" /><br />
+  Prefer Discord? <a href="https://discord.gg/he2gAKCpj">Join the DSH Desktop Discord community</a>.
+</p>
+
 ## Why this project exists
 
 DeepSeek Harness already provides a complete agent runtime and Web UI. DSH Desktop does not reimplement Harness; it supplies the host capabilities needed for a desktop product:
