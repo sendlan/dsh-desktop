@@ -57,9 +57,17 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         id: signing_keychain
         run: node scripts/prepare-macos-signing-keychain.mjs
-      - name: Build Apple Silicon package
+      - name: Build signed Apple Silicon package
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           CSC_KEYCHAIN: ${{ steps.signing_keychain.outputs.keychain }}
+        run: npm run package:mac:arm64
+      - name: Build unsigned Apple Silicon verification package
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ''
+          CSC_KEY_PASSWORD: ''
         run: npm run package:mac:arm64
       - name: Sign, notarize, and staple Apple Silicon DMG
         if: startsWith(github.ref, 'refs/tags/v')
@@ -154,9 +162,17 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         id: signing_keychain
         run: node scripts/prepare-macos-signing-keychain.mjs
-      - name: Build Intel package
+      - name: Build signed Intel package
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           CSC_KEYCHAIN: ${{ steps.signing_keychain.outputs.keychain }}
+        run: npm run package:mac:x64
+      - name: Build unsigned Intel verification package
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ''
+          CSC_KEY_PASSWORD: ''
         run: npm run package:mac:x64
       - name: Sign, notarize, and staple Intel DMG
         if: startsWith(github.ref, 'refs/tags/v')

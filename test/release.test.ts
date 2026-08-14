@@ -119,6 +119,7 @@ describe('GitHub release contract', () => {
     expect(workflow.match(/Prepare macOS signing keychain/g)).toHaveLength(2)
     expect(workflow.match(/xcrun stapler validate/g)).toHaveLength(4)
     expect(workflow.match(/xcrun notarytool submit/g)).toHaveLength(2)
+    expect(workflow.match(/CSC_IDENTITY_AUTO_DISCOVERY: 'false'/g)).toHaveLength(2)
   })
 
   it('only links the currently published Apple Silicon package', async () => {
