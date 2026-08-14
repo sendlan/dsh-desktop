@@ -56,7 +56,8 @@
     "@deepseek-ai/dsh-subagent-in-process-driver": "0.1.0-rc.6",
     "@deepseek-ai/dsh-subprocess": "0.1.0-rc.6",
     "@deepseek-ai/dsh-timeout": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-workflow": "0.1.0-rc.6"
+    "@deepseek-ai/dsh-workflow": "0.1.0-rc.6",
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
     "@types/node": "24.10.1",
@@ -65,7 +66,8 @@
     "electron-vite": "5.0.0",
     "patch-package": "^8.0.1",
     "typescript": "5.9.3",
-    "vitest": "4.0.18"
+    "vitest": "^4.1.10",
+    "yaml": "^2.8.3"
   },
   "build": {
     "appId": "io.dsh.desktop",
@@ -87,6 +89,13 @@
         "to": "icon.png"
       }
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "dataelement",
+        "repo": "dsh-desktop"
+      }
+    ],
     "artifactName": "dsh-desktop-${os}-${arch}.${ext}",
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -100,6 +109,7 @@
     },
     "win": {
       "icon": "build/icon.ico",
+      "verifyUpdateCodeSignature": false,
       "target": [
         {
           "target": "nsis",

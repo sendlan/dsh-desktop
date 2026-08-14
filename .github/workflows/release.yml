@@ -78,6 +78,8 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run package:mac:arm64
+      - name: Preserve Apple Silicon update metadata
+        run: mv dist/latest-mac.yml dist/latest-mac-arm64.yml
       - name: Sign, notarize, and staple Apple Silicon DMG
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -128,6 +130,8 @@ jobs:
           path: |
             dist/dsh-desktop-mac-arm64.dmg
             dist/dsh-desktop-mac-arm64.zip
+            dist/dsh-desktop-mac-arm64.zip.blockmap
+            dist/latest-mac-arm64.yml
           if-no-files-found: error
 
   macos-intel:
@@ -192,6 +196,8 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run package:mac:x64
+      - name: Preserve Intel update metadata
+        run: mv dist/latest-mac.yml dist/latest-mac-x64.yml
       - name: Sign, notarize, and staple Intel DMG
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -242,6 +248,8 @@ jobs:
           path: |
             dist/dsh-desktop-mac-x64.dmg
             dist/dsh-desktop-mac-x64.zip
+            dist/dsh-desktop-mac-x64.zip.blockmap
+            dist/latest-mac-x64.yml
           if-no-files-found: error
 
   windows-x64:
@@ -266,6 +274,8 @@ jobs:
           name: windows-x64
           path: |
             dist/dsh-desktop-windows-x64-setup.exe
+            dist/dsh-desktop-windows-x64-setup.exe.blockmap
+            dist/latest.yml
           if-no-files-found: error
 
   publish:
@@ -282,10 +292,25 @@ jobs:
       - windows-x64
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
+      - name: Merge macOS update metadata
+        run: |
+          node scripts/merge-mac-update-metadata.mjs \
+            release-assets/latest-mac-arm64.yml \
+            release-assets/latest-mac-x64.yml \
+            release-assets/latest-mac.yml
+          find release-assets -maxdepth 1 \
+            \( -name latest-mac-arm64.yml -o -name latest-mac-x64.yml \) \
+            -delete
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}

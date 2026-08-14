@@ -11,6 +11,11 @@ import { HarnessRuntime } from './runtime/harness-runtime'
 import { secureWindow } from './security'
 import { ensureLaunchRoot } from './state/launch-root'
 import { shouldLoadHarnessUrl } from './window-navigation'
+import {
+  checkForUpdates,
+  startUpdateManager,
+  stopUpdateManager
+} from './update/update-manager'
 import type { RuntimeSnapshot } from '../shared/contracts'
 
 let mainWindow: BrowserWindow | undefined
@@ -132,6 +137,9 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
 }
 
 function installMenu(): void {
+  const checkForUpdatesLabel = app.getLocale().toLowerCase().startsWith('zh')
+    ? '检查更新…'
+    : 'Check for Updates…'
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(process.platform === 'darwin'
       ? [
@@ -139,6 +147,11 @@ function installMenu(): void {
             label: app.name,
             submenu: [
               { role: 'about' as const },
+              {
+                label: checkForUpdatesLabel,
+                accelerator: 'CmdOrCtrl+U',
+                click: () => void checkForUpdates(true).catch(showUnexpectedError)
+              },
               { type: 'separator' as const },
               { role: 'hide' as const },
               { role: 'hideOthers' as const },
@@ -161,6 +174,16 @@ function installMenu(): void {
           label: 'Show Harness Log',
           click: () => shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
         },
+        ...(process.platform === 'darwin'
+          ? []
+          : [
+              { type: 'separator' as const },
+              {
+                label: checkForUpdatesLabel,
+                accelerator: 'CmdOrCtrl+U',
+                click: () => void checkForUpdates(true).catch(showUnexpectedError)
+              }
+            ]),
         ...(process.platform === 'darwin'
           ? []
           : [{ type: 'separator' as const }, { role: 'quit' as const }])
@@ -215,6 +238,13 @@ async function bootstrap(): Promise<void> {
   })
   installMenu()
   await launchHarness()
+  startUpdateManager({
+    prepareToInstall: async () => {
+      await runtime.stop()
+      quitting = true
+      stopUpdateManager()
+    }
+  })
 }
 
 const singleInstance = app.requestSingleInstanceLock()
@@ -247,6 +277,7 @@ if (!singleInstance) {
     if (quitting || !runtime) return
     event.preventDefault()
     quitting = true
+    stopUpdateManager()
     void runtime.stop().finally(() => app.quit())
   })
 }

@@ -67,6 +67,40 @@ describe('GitHub release contract', () => {
     expect(packageJson.build.portable).toBeUndefined()
   })
 
+  it('publishes update metadata for installed desktop builds', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as {
+      dependencies: Record<string, string>
+      build: {
+        publish: Array<{ provider: string; owner: string; repo: string }>
+        win: { verifyUpdateCodeSignature: boolean }
+      }
+    }
+    const workflow = await readFile(
+      path.join(projectRoot, '.github', 'workflows', 'release.yml'),
+      'utf8'
+    )
+
+    expect(packageJson.dependencies['electron-updater']).toBeTruthy()
+    expect(packageJson.build.publish).toEqual([
+      { provider: 'github', owner: 'dataelement', repo: 'dsh-desktop' }
+    ])
+    expect(packageJson.build.win.verifyUpdateCodeSignature).toBe(false)
+    for (const asset of [
+      'latest-mac-arm64.yml',
+      'latest-mac-x64.yml',
+      'latest-mac.yml',
+      'latest.yml',
+      'dsh-desktop-mac-arm64.zip.blockmap',
+      'dsh-desktop-mac-x64.zip.blockmap',
+      'dsh-desktop-windows-x64-setup.exe.blockmap'
+    ]) {
+      expect(workflow).toContain(asset)
+    }
+    expect(workflow).toContain('merge-mac-update-metadata.mjs')
+  })
+
   it('keeps builder jobs from attempting implicit tag publishing', async () => {
     const packageJson = JSON.parse(
       await readFile(path.join(projectRoot, 'package.json'), 'utf8')
