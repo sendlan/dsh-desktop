@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A cross-platform desktop shell for DeepSeek Harness.",
   "private": true,
   "type": "module",
@@ -80,6 +80,12 @@
       "out/**/*",
       "node_modules/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
     ],
     "artifactName": "dsh-desktop-${os}-${arch}.${ext}",
     "mac": {

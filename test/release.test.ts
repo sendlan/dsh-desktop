@@ -12,6 +12,18 @@ const releaseAssets = [
 ]
 
 describe('GitHub release contract', () => {
+  it('keeps the package and lockfile versions aligned', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as { version: string }
+    const packageLock = JSON.parse(
+      await readFile(path.join(projectRoot, 'package-lock.json'), 'utf8')
+    ) as { version: string; packages: Record<string, { version?: string }> }
+
+    expect(packageLock.version).toBe(packageJson.version)
+    expect(packageLock.packages['']?.version).toBe(packageJson.version)
+  })
+
   it('declares required DSH peer packages as production dependencies', async () => {
     const packageLock = JSON.parse(
       await readFile(path.join(projectRoot, 'package-lock.json'), 'utf8')
@@ -37,12 +49,17 @@ describe('GitHub release contract', () => {
     ) as {
       build: {
         artifactName: string
+        extraResources: Array<{ from: string; to: string }>
         nsis: { artifactName: string }
         portable: { artifactName: string }
       }
     }
 
     expect(packageJson.build.artifactName).toBe('dsh-desktop-${os}-${arch}.${ext}')
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/icon.png',
+      to: 'icon.png'
+    })
     expect(packageJson.build.nsis.artifactName).toBe(
       'dsh-desktop-windows-${arch}-setup.${ext}'
     )
@@ -76,9 +93,14 @@ describe('GitHub release contract', () => {
     expect(workflow).toContain('runs-on: macos-15-intel')
     expect(workflow).toContain('runs-on: windows-2022')
     for (const asset of releaseAssets) expect(workflow).toContain(asset)
+    expect(
+      workflow.match(
+        /npm version --no-git-tag-version --allow-same-version "\$\{\{ github\.ref_name \}\}"/g
+      )
+    ).toHaveLength(3)
   })
 
-  it('keeps English and Chinese latest-download links aligned with the assets', async () => {
+  it('only links the currently published Apple Silicon package', async () => {
     const readmes = await Promise.all(
       ['README.md', 'README.zh.md'].map((file) =>
         readFile(path.join(projectRoot, file), 'utf8')
@@ -86,10 +108,11 @@ describe('GitHub release contract', () => {
     )
 
     for (const readme of readmes) {
-      for (const asset of releaseAssets) {
-        expect(readme).toContain(
-          `https://github.com/dataelement/dsh-desktop/releases/latest/download/${asset}`
-        )
+      expect(readme).toContain(
+        'https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-mac-arm64.dmg'
+      )
+      for (const asset of releaseAssets.slice(1)) {
+        expect(readme).not.toContain(`releases/latest/download/${asset}`)
       }
     }
   })

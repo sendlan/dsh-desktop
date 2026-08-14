@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildHarnessArguments, buildNodeArguments } from '../src/main/runtime/harness-runtime'
 import { isTrustedAppUrl } from '../src/main/security-policy'
+import { shouldLoadHarnessUrl } from '../src/main/window-navigation'
 
 describe('Harness launch contract', () => {
   it('binds the web server to a random loopback port', () => {
@@ -34,5 +35,23 @@ describe('navigation trust boundary', () => {
     expect(isTrustedAppUrl('https://127.0.0.1:43127')).toBe(false)
     expect(isTrustedAppUrl('http://example.com')).toBe(false)
     expect(isTrustedAppUrl('javascript:alert(1)')).toBe(false)
+  })
+})
+
+describe('Harness window activation', () => {
+  it('preserves the current page when the existing Harness instance is focused again', () => {
+    expect(
+      shouldLoadHarnessUrl(
+        'http://127.0.0.1:43127/settings/models',
+        'http://127.0.0.1:43127'
+      )
+    ).toBe(false)
+  })
+
+  it('loads the page for a new window or a restarted Harness instance', () => {
+    expect(shouldLoadHarnessUrl('about:blank', 'http://127.0.0.1:43127')).toBe(true)
+    expect(
+      shouldLoadHarnessUrl('http://127.0.0.1:43127/settings', 'http://127.0.0.1:43128')
+    ).toBe(true)
   })
 })

@@ -10,6 +10,7 @@ import {
 import { HarnessRuntime } from './runtime/harness-runtime'
 import { secureWindow } from './security'
 import { ensureLaunchRoot } from './state/launch-root'
+import { shouldLoadHarnessUrl } from './window-navigation'
 import type { RuntimeSnapshot } from '../shared/contracts'
 
 let mainWindow: BrowserWindow | undefined
@@ -33,6 +34,12 @@ function dshEntryPath(): string {
   return join(app.getAppPath(), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 }
 
+function desktopIconPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'icon.png')
+    : join(app.getAppPath(), 'build', 'icon.png')
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1380,
@@ -41,6 +48,7 @@ function createWindow(): BrowserWindow {
     minHeight: 640,
     show: false,
     title: '',
+    icon: desktopIconPath(),
     backgroundColor: '#f8f8f6',
     webPreferences: {
       contextIsolation: true,
@@ -63,8 +71,11 @@ function createWindow(): BrowserWindow {
 
 async function openHarness(url: string): Promise<void> {
   const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
-  await window.loadURL(url)
+  if (shouldLoadHarnessUrl(window.webContents.getURL(), url)) {
+    await window.loadURL(url)
+  }
   if (runtime.snapshot().url !== url || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
   window.show()
   window.focus()
 }
@@ -186,6 +197,7 @@ function installMenu(): void {
 }
 
 async function bootstrap(): Promise<void> {
+  if (process.platform === 'darwin') app.dock?.setIcon(desktopIconPath())
   launchDirectory = await ensureLaunchRoot(app.getPath('userData'))
   createWindow()
   runtime = new HarnessRuntime({
