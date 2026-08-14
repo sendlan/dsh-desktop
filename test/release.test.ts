@@ -120,6 +120,13 @@ describe('GitHub release contract', () => {
     expect(workflow.match(/xcrun stapler validate/g)).toHaveLength(4)
     expect(workflow.match(/xcrun notarytool submit/g)).toHaveLength(2)
     expect(workflow.match(/CSC_IDENTITY_AUTO_DISCOVERY: 'false'/g)).toHaveLength(2)
+    expect(workflow).not.toContain("CSC_LINK: ''")
+    expect(workflow).toMatch(
+      /macos-apple-silicon:\n    name: macOS Apple Silicon\n    runs-on: macos-15\n    steps:/
+    )
+    expect(workflow).toMatch(
+      /macos-intel:\n    name: macOS Intel\n    if: [^\n]+\n    runs-on: macos-15-intel\n    steps:/
+    )
   })
 
   it('only links the currently published Apple Silicon package', async () => {
