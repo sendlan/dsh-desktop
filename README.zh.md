@@ -31,7 +31,7 @@ DSH Desktop 把 DeepSeek Harness 的本地 Web 体验封装为桌面应用：应
 
 | 平台 | 安装包 | 下载 |
 | --- | --- | --- |
-| macOS Apple Silicon | DMG 安装包 | [下载 Apple 芯片版](https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-mac-arm64.dmg) |
+| macOS Apple Silicon | DMG 安装包 | [下载 Apple 芯片版](https://www.dshdesktop.com/#download) |
 | macOS Intel | DMG 安装包 | 即将发布 |
 | Windows x64 | EXE 安装版 | 即将发布 |
 | Windows x64 | EXE 便携版 | 即将发布 |

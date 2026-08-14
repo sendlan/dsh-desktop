@@ -129,7 +129,7 @@ describe('GitHub release contract', () => {
     )
   })
 
-  it('only links the currently published Apple Silicon package', async () => {
+  it('routes the published download through the official website', async () => {
     const readmes = await Promise.all(
       ['README.md', 'README.zh.md'].map((file) =>
         readFile(path.join(projectRoot, file), 'utf8')
@@ -137,10 +137,8 @@ describe('GitHub release contract', () => {
     )
 
     for (const readme of readmes) {
-      expect(readme).toContain(
-        'https://github.com/dataelement/dsh-desktop/releases/latest/download/dsh-desktop-mac-arm64.dmg'
-      )
-      for (const asset of releaseAssets.slice(1)) {
+      expect(readme).toContain('https://www.dshdesktop.com/#download')
+      for (const asset of releaseAssets) {
         expect(readme).not.toContain(`releases/latest/download/${asset}`)
       }
     }
