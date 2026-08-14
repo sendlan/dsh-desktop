@@ -14,6 +14,7 @@ import { ensureLaunchRoot } from './state/launch-root'
 import { shouldLoadHarnessUrl } from './window-navigation'
 import {
   checkForUpdates,
+  registerUpdateHandlers,
   startUpdateManager,
   stopUpdateManager
 } from './update/update-manager'
@@ -72,6 +73,7 @@ function createWindow(): BrowserWindow {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: join(import.meta.dirname, '../preload/index.cjs'),
       sandbox: true,
       webSecurity: true
     }
@@ -241,6 +243,7 @@ function installMenu(): void {
 async function bootstrap(): Promise<void> {
   if (process.platform === 'darwin') app.dock?.setIcon(desktopIconPath())
   launchDirectory = await ensureLaunchRoot(app.getPath('userData'))
+  registerUpdateHandlers()
   createWindow()
   runtime = new HarnessRuntime({
     dshEntryPath: dshEntryPath(),

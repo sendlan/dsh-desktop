@@ -1,5 +1,6 @@
-import { app, BrowserWindow, dialog, powerMonitor, type MessageBoxOptions } from 'electron'
+import { app, BrowserWindow, ipcMain, powerMonitor } from 'electron'
 import electronUpdater from 'electron-updater'
+import type { UpdateStatus } from '../../shared/contracts'
 import {
   shouldCheckAfterResume,
   supportsAutoUpdates,
@@ -7,26 +8,49 @@ import {
   UPDATE_STARTUP_DELAY_MS,
   UPDATE_STARTUP_JITTER_MS
 } from './update-policy'
+import {
+  initialUpdateStatus,
+  reduceUpdateStatus,
+  type UpdateStateEvent
+} from './update-state'
 
 const { autoUpdater } = electronUpdater
+const TRANSIENT_STATUS_MS = 8_000
 
+let status = initialUpdateStatus(app.getVersion())
 let prepareToInstall: (() => Promise<void>) | undefined
 let startupTimer: NodeJS.Timeout | undefined
 let intervalTimer: NodeJS.Timeout | undefined
+let resetTimer: NodeJS.Timeout | undefined
 let checkPromise: Promise<unknown> | undefined
 let lastCheckedAt = 0
-let manualCheck = false
-let updateInProgress = false
-let downloadedVersion: string | undefined
-let promptedVersion: string | undefined
 let installing = false
 let started = false
+let handlersRegistered = false
+
+export function getUpdateStatus(): UpdateStatus {
+  return { ...status }
+}
+
+export function registerUpdateHandlers(): void {
+  if (handlersRegistered) return
+  handlersRegistered = true
+  ipcMain.handle('updates:status', () => getUpdateStatus())
+  ipcMain.handle('updates:install', () => installDownloadedUpdate())
+}
 
 export function startUpdateManager(options: { prepareToInstall: () => Promise<void> }): void {
   prepareToInstall = options.prepareToInstall
   if (started) return
   started = true
-  if (!supportsUpdates()) return
+
+  if (!supportsUpdates()) {
+    transition({
+      type: 'unsupported',
+      message: 'Updates are available in installed macOS and Windows builds.'
+    })
+    return
+  }
 
   configureUpdater()
   startupTimer = setTimeout(
@@ -37,34 +61,60 @@ export function startUpdateManager(options: { prepareToInstall: () => Promise<vo
   powerMonitor.on('resume', checkAfterResume)
 }
 
-export async function checkForUpdates(manual = false): Promise<void> {
+export async function checkForUpdates(manual = false): Promise<UpdateStatus> {
   if (!supportsUpdates()) {
-    if (manual) await showMessage(unsupportedDialog())
-    return
+    transition(
+      {
+        type: 'unsupported',
+        message: 'Update checks are only available in installed macOS and Windows builds.'
+      },
+      manual
+    )
+    if (manual) scheduleReset()
+    return getUpdateStatus()
   }
-  if (downloadedVersion) {
-    if (manual) await promptToInstall(downloadedVersion, true)
-    return
-  }
-  if (checkPromise || updateInProgress) return
 
-  manualCheck = manual
+  if (checkPromise || ['available', 'downloading', 'downloaded'].includes(status.phase)) {
+    return getUpdateStatus()
+  }
+
+  transition({ type: 'check', manual })
   lastCheckedAt = Date.now()
   checkPromise = autoUpdater.checkForUpdates()
+
   try {
     await checkPromise
   } catch (error) {
-    console.error('[updater] update check failed', error)
+    transition({ type: 'error', message: errorMessage(error) })
+    if (manual) scheduleReset()
   } finally {
     checkPromise = undefined
+  }
+
+  return getUpdateStatus()
+}
+
+export async function installDownloadedUpdate(): Promise<void> {
+  if (status.phase !== 'downloaded' || installing) return
+  installing = true
+
+  try {
+    await prepareToInstall?.()
+    autoUpdater.quitAndInstall(false, true)
+  } catch (error) {
+    installing = false
+    transition({ type: 'error', message: errorMessage(error) }, true)
+    scheduleReset()
   }
 }
 
 export function stopUpdateManager(): void {
   if (startupTimer) clearTimeout(startupTimer)
   if (intervalTimer) clearInterval(intervalTimer)
+  if (resetTimer) clearTimeout(resetTimer)
   startupTimer = undefined
   intervalTimer = undefined
+  resetTimer = undefined
   if (started && app.isReady()) powerMonitor.removeListener('resume', checkAfterResume)
 }
 
@@ -79,87 +129,47 @@ function configureUpdater(): void {
     debug: (...args: unknown[]) => console.debug('[updater]', ...args)
   }
 
-  autoUpdater.on('checking-for-update', () => console.info('[updater] checking for update'))
-  autoUpdater.on('update-available', (info) => {
-    updateInProgress = true
-    console.info(`[updater] downloading version ${info.version}`)
+  autoUpdater.on('checking-for-update', () =>
+    transition({ type: 'check', manual: status.manual })
+  )
+  autoUpdater.on('update-available', (info) =>
+    transition({ type: 'available', version: info.version })
+  )
+  autoUpdater.on('download-progress', (progress) =>
+    transition({ type: 'progress', percent: progress.percent })
+  )
+  autoUpdater.on('update-not-available', () => {
+    transition({ type: 'not-available' })
+    scheduleReset()
   })
-  autoUpdater.on('download-progress', (progress) => {
-    console.info(`[updater] download ${progress.percent.toFixed(1)}%`)
-  })
-  autoUpdater.on('update-not-available', () => void handleNoUpdate())
-  autoUpdater.on('update-downloaded', (info) => void handleDownloaded(info.version))
-  autoUpdater.on('error', (error) => void handleError(error))
-}
-
-async function handleNoUpdate(): Promise<void> {
-  updateInProgress = false
-  if (!manualCheck) return
-  manualCheck = false
-  await showMessage({
-    type: 'info',
-    title: 'DSH Desktop Update',
-    message: 'DSH Desktop is up to date.',
-    detail: `You are running version ${app.getVersion()}.`,
-    buttons: ['OK']
+  autoUpdater.on('update-downloaded', (info) =>
+    transition({ type: 'downloaded', version: info.version })
+  )
+  autoUpdater.on('error', (error) => {
+    transition({ type: 'error', message: errorMessage(error) })
+    if (status.manual) scheduleReset()
   })
 }
 
-async function handleDownloaded(version: string): Promise<void> {
-  updateInProgress = false
-  downloadedVersion = version
-  const forcePrompt = manualCheck
-  manualCheck = false
-  await promptToInstall(version, forcePrompt)
-}
-
-async function handleError(error: Error): Promise<void> {
-  updateInProgress = false
-  console.error('[updater]', error)
-  if (!manualCheck) return
-  manualCheck = false
-  await showMessage({
-    type: 'error',
-    title: 'DSH Desktop Update',
-    message: 'Unable to check for updates.',
-    detail: error.message,
-    buttons: ['OK']
-  })
-}
-
-async function promptToInstall(version: string, force = false): Promise<void> {
-  if (!force && promptedVersion === version) return
-  promptedVersion = version
-  const result = await showMessage({
-    type: 'info',
-    title: 'DSH Desktop Update',
-    message: `DSH Desktop ${version} is ready to install.`,
-    detail: 'Restart now to install the update, or install it automatically when you quit.',
-    buttons: ['Restart and Install', 'Later'],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true
-  })
-  if (result.response === 0) await installDownloadedUpdate()
-}
-
-async function installDownloadedUpdate(): Promise<void> {
-  if (!downloadedVersion || installing) return
-  installing = true
-  try {
-    await prepareToInstall?.()
-    autoUpdater.quitAndInstall(false, true)
-  } catch (error) {
-    installing = false
-    const message = error instanceof Error ? error.message : String(error)
-    await showMessage({
-      type: 'error',
-      title: 'DSH Desktop Update',
-      message: 'Unable to install the downloaded update.',
-      detail: message,
-      buttons: ['OK']
-    })
+function transition(event: UpdateStateEvent, manualOverride?: boolean): void {
+  if (event.type !== 'reset' && resetTimer) {
+    clearTimeout(resetTimer)
+    resetTimer = undefined
   }
+
+  status = reduceUpdateStatus(status, event)
+  if (manualOverride !== undefined) status.manual = manualOverride
+
+  console.info('[updater] status', status.phase, status.percent ?? '')
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send('updates:status-changed', getUpdateStatus())
+  }
+}
+
+function scheduleReset(): void {
+  if (!status.manual) return
+  if (resetTimer) clearTimeout(resetTimer)
+  resetTimer = setTimeout(() => transition({ type: 'reset' }), TRANSIENT_STATUS_MS)
 }
 
 function checkAfterResume(): void {
@@ -170,18 +180,6 @@ function supportsUpdates(): boolean {
   return supportsAutoUpdates(app.isPackaged, process.platform)
 }
 
-function unsupportedDialog(): MessageBoxOptions {
-  return {
-    type: 'info',
-    title: 'DSH Desktop Update',
-    message: 'Update checks are available in installed macOS and Windows builds.',
-    buttons: ['OK']
-  }
-}
-
-function showMessage(options: MessageBoxOptions): ReturnType<typeof dialog.showMessageBox> {
-  const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-  return owner && !owner.isDestroyed()
-    ? dialog.showMessageBox(owner, options)
-    : dialog.showMessageBox(options)
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
