@@ -133,6 +133,7 @@ describe('GitHub release contract', () => {
     expect(developmentConfig).toContain("output: 'dist-dev'")
     expect(developmentConfig).toContain("dshDesktopChannel: 'development'")
     expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop-dev'))")
+    expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop'))")
     expect(main).toContain('if (!developmentBuild)')
   })
 
