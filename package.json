@@ -90,6 +90,10 @@
       {
         "from": "build/app-icon.png",
         "to": "icon.png"
+      },
+      {
+        "from": "build/harness-worker.cjs",
+        "to": "harness-worker.cjs"
       }
     ],
     "publish": [

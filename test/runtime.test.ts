@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   buildHarnessArguments,
@@ -45,6 +47,12 @@ describe('Harness launch contract', () => {
       }
     })
     expect(options.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
+  })
+
+  it('ships a CommonJS worker that reports ESM entry loading failures', () => {
+    const worker = readFileSync(join(process.cwd(), 'build', 'harness-worker.cjs'), 'utf8')
+    expect(worker).toContain("import(pathToFileURL(dshEntryPath).href)")
+    expect(worker).toContain("reportError('could not load DSH entry', error)")
   })
 
   it('makes native Windows termination codes diagnosable', () => {

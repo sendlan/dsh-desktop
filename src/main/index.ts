@@ -110,6 +110,12 @@ function dshEntryPath(): string {
   return join(app.getAppPath(), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 }
 
+function harnessWorkerPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'harness-worker.cjs')
+    : join(app.getAppPath(), 'build', 'harness-worker.cjs')
+}
+
 function desktopIconPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
@@ -309,6 +315,7 @@ async function bootstrap(): Promise<void> {
   createWindow()
   runtime = new HarnessRuntime({
     dshEntryPath: dshEntryPath(),
+    workerEntryPath: harnessWorkerPath(),
     dshHome: join(app.getPath('userData'), 'harness'),
     logPath: join(app.getPath('logs'), 'harness.log'),
     launchProcess: (modulePath, args, options) =>

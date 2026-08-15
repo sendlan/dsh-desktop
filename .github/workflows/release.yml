@@ -274,6 +274,46 @@ jobs:
       - name: Build isolated Windows development package
         if: github.event_name == 'workflow_dispatch'
         run: npm run package:dev:win
+      - name: Smoke test packaged Windows Harness
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $userData = Join-Path $env:APPDATA 'dsh-desktop-dev'
+          $logPath = Join-Path $userData 'logs\harness.log'
+          $executable = 'dist-dev\win-unpacked\DSH Desktop Dev.exe'
+          if (Test-Path $userData) { Remove-Item -Recurse -Force $userData }
+          $desktop = Start-Process -FilePath $executable -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(75)
+            $ready = $false
+            while ((Get-Date) -lt $deadline) {
+              if ($desktop.HasExited) {
+                throw "DSH Desktop Dev exited before Harness was ready (exit code $($desktop.ExitCode))."
+              }
+              if (Test-Path $logPath) {
+                $log = Get-Content -Raw $logPath
+                $match = [regex]::Match($log, '\[desktop\] endpoint (http://127\.0\.0\.1:\d+)')
+                if ($match.Success) {
+                  try {
+                    $response = Invoke-WebRequest -UseBasicParsing -Uri $match.Groups[1].Value -TimeoutSec 2
+                    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
+                      $ready = $true
+                      break
+                    }
+                  } catch { }
+                }
+              }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $ready) { throw 'Packaged Harness did not become ready within 75 seconds.' }
+            Write-Host 'Packaged Windows Harness smoke test passed.'
+          } finally {
+            if (Test-Path $logPath) {
+              Write-Host '--- harness.log ---'
+              Get-Content $logPath
+            }
+            if (-not $desktop.HasExited) { Stop-Process -Id $desktop.Id -Force }
+          }
       - uses: actions/upload-artifact@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:

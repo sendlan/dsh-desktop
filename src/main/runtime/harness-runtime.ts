@@ -7,6 +7,7 @@ import type { RuntimePhase, RuntimeSnapshot } from '../../shared/contracts'
 
 export interface HarnessRuntimeOptions {
   dshEntryPath: string
+  workerEntryPath: string
   dshHome: string
   logPath: string
   launchProcess(modulePath: string, args: string[], options: ForkOptions): UtilityProcess
@@ -73,6 +74,10 @@ export class HarnessRuntime {
       this.setState('failed', `Harness entry was not found: ${this.options.dshEntryPath}`)
       return
     }
+    if (!existsSync(this.options.workerEntryPath)) {
+      this.setState('failed', `Harness worker was not found: ${this.options.workerEntryPath}`)
+      return
+    }
 
     await mkdir(this.options.dshHome, { recursive: true })
     await mkdir(dirname(this.options.logPath), { recursive: true })
@@ -90,8 +95,8 @@ export class HarnessRuntime {
     let child: UtilityProcess
     try {
       child = this.options.launchProcess(
-        this.options.dshEntryPath,
-        args,
+        this.options.workerEntryPath,
+        [this.options.dshEntryPath, ...args],
         buildHarnessForkOptions(launchDirectory, this.options.dshHome)
       )
     } catch (error) {
