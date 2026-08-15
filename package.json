@@ -60,7 +60,8 @@
     "@deepseek-ai/dsh-subprocess": "0.1.0-rc.6",
     "@deepseek-ai/dsh-timeout": "0.1.0-rc.6",
     "@deepseek-ai/dsh-workflow": "0.1.0-rc.6",
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "node": "24.9.0"
   },
   "devDependencies": {
     "@types/node": "24.10.1",
@@ -90,10 +91,6 @@
       {
         "from": "build/app-icon.png",
         "to": "icon.png"
-      },
-      {
-        "from": "build/harness-worker.cjs",
-        "to": "harness-worker.cjs"
       }
     ],
     "publish": [

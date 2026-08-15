@@ -1,9 +1,8 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   buildHarnessArguments,
-  buildHarnessForkOptions,
+  buildHarnessSpawnOptions,
+  buildNodeArguments,
   formatExitCode
 } from '../src/main/runtime/harness-runtime'
 import { canGrantWindowPermission, isTrustedAppUrl } from '../src/main/security-policy'
@@ -23,8 +22,8 @@ describe('Harness launch contract', () => {
     ])
   })
 
-  it('launches Harness as an isolated Electron utility process', () => {
-    const options = buildHarnessForkOptions(
+  it('launches Harness with the bundled Node.js runtime', () => {
+    const options = buildHarnessSpawnOptions(
       'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\launch-root',
       'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\harness',
       'win32',
@@ -37,9 +36,8 @@ describe('Harness launch contract', () => {
 
     expect(options).toMatchObject({
       cwd: 'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\launch-root',
-      execArgv: ['--expose-internals'],
-      stdio: 'pipe',
-      serviceName: 'DSH Harness',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
       env: {
         DSH_HOME: 'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\harness',
         NO_COLOR: '1',
@@ -49,11 +47,16 @@ describe('Harness launch contract', () => {
     expect(options.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
   })
 
-  it('ships a CommonJS worker that reports ESM entry loading failures', () => {
-    const worker = readFileSync(join(process.cwd(), 'build', 'harness-worker.cjs'), 'utf8')
-    expect(worker).toContain("import(pathToFileURL(dshEntryPath).href)")
-    expect(worker).toContain("process.execArgv.push('--expose-internals')")
-    expect(worker).toContain("reportError('could not load DSH entry', error)")
+  it('passes the internal-loader flag directly to bundled Node.js', () => {
+    expect(buildNodeArguments('C:\\app\\dsh\\lib\\bin.js', 43127)).toEqual([
+      '--expose-internals',
+      'C:\\app\\dsh\\lib\\bin.js',
+      'web',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '43127'
+    ])
   })
 
   it('makes native Windows termination codes diagnosable', () => {

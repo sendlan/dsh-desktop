@@ -1,16 +1,20 @@
+import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from 'node:child_process'
 import { createWriteStream, existsSync, type WriteStream } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
-import type { ForkOptions, UtilityProcess } from 'electron'
 import type { RuntimePhase, RuntimeSnapshot } from '../../shared/contracts'
 
 export interface HarnessRuntimeOptions {
   dshEntryPath: string
-  workerEntryPath: string
+  nodeExecutablePath: string
   dshHome: string
   logPath: string
-  launchProcess(modulePath: string, args: string[], options: ForkOptions): UtilityProcess
+  launchProcess(
+    executablePath: string,
+    args: string[],
+    options: SpawnOptionsWithoutStdio
+  ): ChildProcessWithoutNullStreams
   startupTimeoutMs?: number
   onChanged(snapshot: RuntimeSnapshot): void
 }
@@ -19,12 +23,12 @@ export function buildHarnessArguments(port: number): string[] {
   return ['web', '--host', '127.0.0.1', '--port', String(port)]
 }
 
-export function buildHarnessForkOptions(
+export function buildHarnessSpawnOptions(
   launchDirectory: string,
   dshHome: string,
   platform: NodeJS.Platform = process.platform,
   environment: NodeJS.ProcessEnv = process.env
-): ForkOptions {
+): SpawnOptionsWithoutStdio {
   const { ELECTRON_RUN_AS_NODE: _runAsNode, ...parentEnvironment } = environment
   const pathKey = platform === 'win32' ? 'Path' : 'PATH'
 
@@ -36,16 +40,17 @@ export function buildHarnessForkOptions(
       NO_COLOR: '1',
       [pathKey]: environment[pathKey] ?? environment.PATH ?? ''
     },
-    // Cordis HMR needs access to Node's internal ESM loader. This flag is only
-    // granted to the isolated Harness utility process, never to the renderer.
-    execArgv: ['--expose-internals'],
-    stdio: 'pipe',
-    serviceName: 'DSH Harness'
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true
   }
 }
 
+export function buildNodeArguments(dshEntryPath: string, port: number): string[] {
+  return ['--expose-internals', dshEntryPath, ...buildHarnessArguments(port)]
+}
+
 export class HarnessRuntime {
-  private child?: UtilityProcess
+  private child?: ChildProcessWithoutNullStreams
   private logStream?: WriteStream
   private phase: RuntimePhase = 'idle'
   private message = 'Harness is not running.'
@@ -74,8 +79,8 @@ export class HarnessRuntime {
       this.setState('failed', `Harness entry was not found: ${this.options.dshEntryPath}`)
       return
     }
-    if (!existsSync(this.options.workerEntryPath)) {
-      this.setState('failed', `Harness worker was not found: ${this.options.workerEntryPath}`)
+    if (!existsSync(this.options.nodeExecutablePath)) {
+      this.setState('failed', `Bundled Node.js runtime was not found: ${this.options.nodeExecutablePath}`)
       return
     }
 
@@ -85,19 +90,19 @@ export class HarnessRuntime {
 
     const port = await reservePort()
     const url = `http://127.0.0.1:${port}`
-    const args = buildHarnessArguments(port)
+    const args = buildNodeArguments(this.options.dshEntryPath, port)
 
     this.writeLog(`\n[desktop] starting ${new Date().toISOString()}`)
     this.writeLog(`[desktop] launch directory ${launchDirectory}`)
     this.writeLog(`[desktop] endpoint ${url}`)
     this.setState('starting', 'Starting DeepSeek Harness…')
 
-    let child: UtilityProcess
+    let child: ChildProcessWithoutNullStreams
     try {
       child = this.options.launchProcess(
-        this.options.workerEntryPath,
-        [this.options.dshEntryPath, ...args],
-        buildHarnessForkOptions(launchDirectory, this.options.dshHome)
+        this.options.nodeExecutablePath,
+        args,
+        buildHarnessSpawnOptions(launchDirectory, this.options.dshHome)
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -107,21 +112,25 @@ export class HarnessRuntime {
     }
     this.child = child
 
-    child.stdout?.on('data', (chunk: Buffer) => this.writeChunk('stdout', chunk))
-    child.stderr?.on('data', (chunk: Buffer) => this.writeChunk('stderr', chunk))
-    child.once('spawn', () => this.writeLog('[desktop] Harness utility process started'))
-    child.once('error', (type, location) => {
-      this.writeLog(`[utility] ${type}${location.length > 0 ? ` at ${location}` : ''}`)
-    })
-    child.once('exit', (code) => {
+    child.stdout.on('data', (chunk: Buffer) => this.writeChunk('stdout', chunk))
+    child.stderr.on('data', (chunk: Buffer) => this.writeChunk('stderr', chunk))
+    child.once('spawn', () => this.writeLog('[desktop] Bundled Node.js Harness process started'))
+    child.once('error', (error) => {
+      this.writeLog(`[node] ${error.stack ?? error.message}`)
       if (this.child !== child) return
       this.child = undefined
-      this.setState('failed', `Harness stopped unexpectedly (${formatExitCode(code)}).`)
+      this.setState('failed', `Harness could not start: ${error.message}`)
+    })
+    child.once('exit', (code, signal) => {
+      if (this.child !== child) return
+      this.child = undefined
+      const detail = signal ? `signal ${signal}` : formatExitCode(code ?? -1)
+      this.setState('failed', `Harness stopped unexpectedly (${detail}).`)
     })
 
     const ready = await waitUntilReady(
       url,
-      () => this.child === child,
+      () => this.child === child && child.exitCode === null,
       this.options.startupTimeoutMs ?? 45_000
     )
 
@@ -152,23 +161,17 @@ export class HarnessRuntime {
     this.setState('idle', 'Harness is not running.')
   }
 
-  private async stopChild(child: UtilityProcess): Promise<void> {
-    if (child.pid === undefined) return
+  private async stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+    if (child.exitCode !== null) return
     const exitPromise = new Promise<boolean>((resolve) =>
       child.once('exit', () => resolve(true))
     )
-    child.kill()
+    child.kill('SIGTERM')
     const exited = await Promise.race([
       exitPromise,
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000))
     ])
-    if (!exited && child.pid !== undefined) {
-      try {
-        process.kill(child.pid, 'SIGKILL')
-      } catch {
-        // The utility process may have exited between the timeout and this check.
-      }
-    }
+    if (!exited && child.exitCode === null) child.kill('SIGKILL')
   }
 
   private setState(phase: RuntimePhase, message: string): void {

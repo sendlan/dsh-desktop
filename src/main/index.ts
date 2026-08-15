@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import {
@@ -7,7 +8,6 @@ import {
   Menu,
   nativeTheme,
   shell,
-  utilityProcess,
   type MessageBoxOptions
 } from 'electron'
 import { HarnessRuntime } from './runtime/harness-runtime'
@@ -110,10 +110,9 @@ function dshEntryPath(): string {
   return join(app.getAppPath(), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 }
 
-function harnessWorkerPath(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, 'harness-worker.cjs')
-    : join(app.getAppPath(), 'build', 'harness-worker.cjs')
+function bundledNodePath(): string {
+  const executable = process.platform === 'win32' ? 'node.exe' : 'node'
+  return join(app.getAppPath(), 'node_modules', 'node', 'bin', executable)
 }
 
 function desktopIconPath(): string {
@@ -315,11 +314,10 @@ async function bootstrap(): Promise<void> {
   createWindow()
   runtime = new HarnessRuntime({
     dshEntryPath: dshEntryPath(),
-    workerEntryPath: harnessWorkerPath(),
+    nodeExecutablePath: bundledNodePath(),
     dshHome: join(app.getPath('userData'), 'harness'),
     logPath: join(app.getPath('logs'), 'harness.log'),
-    launchProcess: (modulePath, args, options) =>
-      utilityProcess.fork(modulePath, args, options),
+    launchProcess: (executablePath, args, options) => spawn(executablePath, args, options),
     onChanged: (snapshot) => {
       if (snapshot.phase === 'ready' && snapshot.url) {
         void openHarness(snapshot.url).catch(showUnexpectedError)
