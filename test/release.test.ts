@@ -87,7 +87,7 @@ describe('GitHub release contract', () => {
     expect(main).toContain('await showSplash()')
     expect(splash).toContain('Starting DSH Desktop')
     expect(splash).toContain('prefers-reduced-motion')
-    expect(patch).toContain('id: directory-picker\n  disabled: true')
+    expect(patch).toMatch(/id: directory-picker\r?\n  disabled: true/)
     expect(patch).toContain("name: '@deepseek-ai/dsh-host-directory-picker-native'")
   })
 
