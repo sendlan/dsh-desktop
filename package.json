@@ -33,6 +33,7 @@
     "test:watch": "vitest",
     "package:dir": "npm run build && electron-builder --dir",
     "package:dev:dir": "npm run build && electron-builder --dir --config electron-builder.dev.cjs",
+    "package:dev:win": "node scripts/verify-target.mjs win32 x64 && npm run build && electron-builder --win --x64 --publish never --config electron-builder.dev.cjs",
     "package:mac": "npm run build && electron-builder --mac --publish never",
     "package:mac:arm64": "node scripts/verify-target.mjs darwin arm64 && npm run build && electron-builder --mac --arm64 --publish never",
     "package:mac:x64": "node scripts/verify-target.mjs darwin x64 && npm run build && electron-builder --mac --x64 --publish never",

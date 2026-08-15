@@ -128,10 +128,16 @@ describe('GitHub release contract', () => {
 
     expect(packageJson.scripts['package:dev:dir']).toContain('npm run build')
     expect(packageJson.scripts['package:dev:dir']).toContain('electron-builder.dev.cjs')
+    expect(packageJson.scripts['package:dev:win']).toContain('verify-target.mjs win32 x64')
+    expect(packageJson.scripts['package:dev:win']).toContain('electron-builder.dev.cjs')
+    expect(packageJson.scripts['package:dev:win']).toContain('--publish never')
     expect(developmentConfig).toContain("appId: 'io.dsh.desktop.dev'")
     expect(developmentConfig).toContain("productName: 'DSH Desktop Dev'")
     expect(developmentConfig).toContain("output: 'dist-dev'")
     expect(developmentConfig).toContain("dshDesktopChannel: 'development'")
+    expect(developmentConfig).toContain(
+      "artifactName: 'dsh-desktop-dev-windows-${arch}-setup.${ext}'"
+    )
     expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop-dev'))")
     expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop'))")
     expect(main).toContain('if (!developmentBuild)')
@@ -146,6 +152,9 @@ describe('GitHub release contract', () => {
     expect(workflow).toContain('runs-on: macos-15')
     expect(workflow).toContain('runs-on: macos-15-intel')
     expect(workflow).toContain('runs-on: windows-2022')
+    expect(workflow).toContain('npm run package:dev:win')
+    expect(workflow).toContain('name: windows-x64-dev')
+    expect(workflow).toContain('dist-dev/dsh-desktop-dev-windows-x64-setup.exe')
     for (const asset of releaseAssets) expect(workflow).toContain(asset)
     expect(
       workflow.match(
