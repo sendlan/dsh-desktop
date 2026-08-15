@@ -1,0 +1,8 @@
+# DSH Desktop always runs the Host on the same machine as its operator.
+# Pin the dual-face native interaction instead of the web/remote browse fallback.
+- id: directory-picker
+  disabled: true
+
+- insert:
+    - id: directory-picker-native-desktop
+      name: '@deepseek-ai/dsh-host-directory-picker-native'

@@ -22,6 +22,18 @@ describe('Harness launch contract', () => {
     ])
   })
 
+  it('applies the desktop composition patch before web arguments', () => {
+    expect(buildHarnessArguments(43127, 'C:\\app\\dsh-desktop.patch.yml')).toEqual([
+      'web',
+      '--patch',
+      'C:\\app\\dsh-desktop.patch.yml',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '43127'
+    ])
+  })
+
   it('launches Harness with the bundled Node.js runtime', () => {
     const options = buildHarnessSpawnOptions(
       'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\launch-root',
@@ -52,13 +64,16 @@ describe('Harness launch contract', () => {
       buildNodeArguments(
         'C:\\app\\harness-node-entry.mjs',
         'C:\\app\\dsh\\lib\\bin.js',
-        43127
+        43127,
+        'C:\\app\\dsh-desktop.patch.yml'
       )
     ).toEqual([
       '--expose-internals',
       'C:\\app\\harness-node-entry.mjs',
       'C:\\app\\dsh\\lib\\bin.js',
       'web',
+      '--patch',
+      'C:\\app\\dsh-desktop.patch.yml',
       '--host',
       '127.0.0.1',
       '--port',

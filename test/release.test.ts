@@ -60,11 +60,35 @@ describe('GitHub release contract', () => {
       from: 'build/app-icon.png',
       to: 'icon.png'
     })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/splash.html',
+      to: 'splash.html'
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/dsh-desktop.patch.yml',
+      to: 'dsh-desktop.patch.yml'
+    })
     expect(packageJson.build.nsis.artifactName).toBe(
       'dsh-desktop-windows-${arch}-setup.${ext}'
     )
     expect(packageJson.build.win.target).toEqual([{ target: 'nsis', arch: ['x64'] }])
     expect(packageJson.build.portable).toBeUndefined()
+  })
+
+  it('shows a packaged startup surface and pins the native directory picker', async () => {
+    const main = await readFile(path.join(projectRoot, 'src', 'main', 'index.ts'), 'utf8')
+    const splash = await readFile(path.join(projectRoot, 'build', 'splash.html'), 'utf8')
+    const patch = await readFile(
+      path.join(projectRoot, 'build', 'dsh-desktop.patch.yml'),
+      'utf8'
+    )
+
+    expect(main).toContain("desktopResourcePath('splash.html')")
+    expect(main).toContain('await showSplash()')
+    expect(splash).toContain('Starting DSH Desktop')
+    expect(splash).toContain('prefers-reduced-motion')
+    expect(patch).toContain('id: directory-picker\n  disabled: true')
+    expect(patch).toContain("name: '@deepseek-ai/dsh-host-directory-picker-native'")
   })
 
   it('publishes update metadata for installed desktop builds', async () => {

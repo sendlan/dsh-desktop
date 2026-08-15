@@ -9,6 +9,7 @@ export interface HarnessRuntimeOptions {
   dshEntryPath: string
   nodeExecutablePath: string
   nodeEntryPath: string
+  dshPatchPath: string
   dshHome: string
   logPath: string
   launchProcess(
@@ -20,8 +21,15 @@ export interface HarnessRuntimeOptions {
   onChanged(snapshot: RuntimeSnapshot): void
 }
 
-export function buildHarnessArguments(port: number): string[] {
-  return ['web', '--host', '127.0.0.1', '--port', String(port)]
+export function buildHarnessArguments(port: number, patchPath?: string): string[] {
+  return [
+    'web',
+    ...(patchPath ? ['--patch', patchPath] : []),
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(port)
+  ]
 }
 
 export function buildHarnessSpawnOptions(
@@ -49,9 +57,15 @@ export function buildHarnessSpawnOptions(
 export function buildNodeArguments(
   nodeEntryPath: string,
   dshEntryPath: string,
-  port: number
+  port: number,
+  patchPath?: string
 ): string[] {
-  return ['--expose-internals', nodeEntryPath, dshEntryPath, ...buildHarnessArguments(port)]
+  return [
+    '--expose-internals',
+    nodeEntryPath,
+    dshEntryPath,
+    ...buildHarnessArguments(port, patchPath)
+  ]
 }
 
 export class HarnessRuntime {
@@ -92,6 +106,10 @@ export class HarnessRuntime {
       this.setState('failed', `Harness diagnostic entry was not found: ${this.options.nodeEntryPath}`)
       return
     }
+    if (!existsSync(this.options.dshPatchPath)) {
+      this.setState('failed', `DSH Desktop patch was not found: ${this.options.dshPatchPath}`)
+      return
+    }
 
     await mkdir(this.options.dshHome, { recursive: true })
     await mkdir(dirname(this.options.logPath), { recursive: true })
@@ -99,7 +117,12 @@ export class HarnessRuntime {
 
     const port = await reservePort()
     const url = `http://127.0.0.1:${port}`
-    const args = buildNodeArguments(this.options.nodeEntryPath, this.options.dshEntryPath, port)
+    const args = buildNodeArguments(
+      this.options.nodeEntryPath,
+      this.options.dshEntryPath,
+      port,
+      this.options.dshPatchPath
+    )
     const startupTimeoutMs =
       this.options.startupTimeoutMs ?? (process.platform === 'win32' ? 120_000 : 45_000)
 

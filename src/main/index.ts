@@ -121,6 +121,10 @@ function harnessNodeEntryPath(): string {
     : join(app.getAppPath(), 'build', 'harness-node-entry.mjs')
 }
 
+function desktopResourcePath(name: string): string {
+  return app.isPackaged ? join(process.resourcesPath, name) : join(app.getAppPath(), 'build', name)
+}
+
 function desktopIconPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
@@ -179,8 +183,16 @@ async function openHarness(url: string): Promise<void> {
   window.focus()
 }
 
+async function showSplash(): Promise<void> {
+  const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
+  await window.loadFile(desktopResourcePath('splash.html'))
+  if (window.isDestroyed()) return
+  window.show()
+  window.focus()
+}
+
 async function launchHarness(): Promise<void> {
-  mainWindow?.hide()
+  await showSplash()
   await runtime.start(launchDirectory)
 }
 
@@ -322,6 +334,7 @@ async function bootstrap(): Promise<void> {
     dshEntryPath: dshEntryPath(),
     nodeExecutablePath: bundledNodePath(),
     nodeEntryPath: harnessNodeEntryPath(),
+    dshPatchPath: desktopResourcePath('dsh-desktop.patch.yml'),
     dshHome: join(app.getPath('userData'), 'harness'),
     logPath: join(app.getPath('logs'), 'harness.log'),
     launchProcess: (executablePath, args, options) => spawn(executablePath, args, options),

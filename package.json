@@ -95,6 +95,14 @@
       {
         "from": "build/harness-node-entry.mjs",
         "to": "harness-node-entry.mjs"
+      },
+      {
+        "from": "build/dsh-desktop.patch.yml",
+        "to": "dsh-desktop.patch.yml"
+      },
+      {
+        "from": "build/splash.html",
+        "to": "splash.html"
       }
     ],
     "publish": [
