@@ -115,6 +115,12 @@ function bundledNodePath(): string {
   return join(app.getAppPath(), 'node_modules', 'node', 'bin', executable)
 }
 
+function harnessNodeEntryPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'harness-node-entry.mjs')
+    : join(app.getAppPath(), 'build', 'harness-node-entry.mjs')
+}
+
 function desktopIconPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
@@ -315,6 +321,7 @@ async function bootstrap(): Promise<void> {
   runtime = new HarnessRuntime({
     dshEntryPath: dshEntryPath(),
     nodeExecutablePath: bundledNodePath(),
+    nodeEntryPath: harnessNodeEntryPath(),
     dshHome: join(app.getPath('userData'), 'harness'),
     logPath: join(app.getPath('logs'), 'harness.log'),
     launchProcess: (executablePath, args, options) => spawn(executablePath, args, options),

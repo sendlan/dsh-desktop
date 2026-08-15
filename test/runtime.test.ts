@@ -48,8 +48,15 @@ describe('Harness launch contract', () => {
   })
 
   it('passes the internal-loader flag directly to bundled Node.js', () => {
-    expect(buildNodeArguments('C:\\app\\dsh\\lib\\bin.js', 43127)).toEqual([
+    expect(
+      buildNodeArguments(
+        'C:\\app\\harness-node-entry.mjs',
+        'C:\\app\\dsh\\lib\\bin.js',
+        43127
+      )
+    ).toEqual([
       '--expose-internals',
+      'C:\\app\\harness-node-entry.mjs',
       'C:\\app\\dsh\\lib\\bin.js',
       'web',
       '--host',
