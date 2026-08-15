@@ -78,6 +78,12 @@
     "productName": "DSH Desktop",
     "asar": false,
     "npmRebuild": false,
+    "compression": "maximum",
+    "electronLanguages": [
+      "en-US",
+      "zh-CN",
+      "zh-TW"
+    ],
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -85,7 +91,9 @@
     "files": [
       "out/**/*",
       "node_modules/**/*",
-      "package.json"
+      "package.json",
+      "!**/*.map",
+      "!**/node_modules/@mistralai/mistralai/src/**"
     ],
     "extraResources": [
       {
@@ -107,9 +115,8 @@
     ],
     "publish": [
       {
-        "provider": "github",
-        "owner": "dataelement",
-        "repo": "dsh-desktop"
+        "provider": "generic",
+        "url": "https://dshdesktop.com/updates/latest/"
       }
     ],
     "artifactName": "dsh-desktop-${os}-${arch}.${ext}",
@@ -122,6 +129,9 @@
         "dmg",
         "zip"
       ]
+    },
+    "dmg": {
+      "format": "UDBZ"
     },
     "win": {
       "icon": "build/icon.ico",
