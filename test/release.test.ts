@@ -116,6 +116,26 @@ describe('GitHub release contract', () => {
     }
   })
 
+  it('packages an isolated development channel from the current workspace', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as { scripts: Record<string, string> }
+    const developmentConfig = await readFile(
+      path.join(projectRoot, 'electron-builder.dev.cjs'),
+      'utf8'
+    )
+    const main = await readFile(path.join(projectRoot, 'src', 'main', 'index.ts'), 'utf8')
+
+    expect(packageJson.scripts['package:dev:dir']).toContain('npm run build')
+    expect(packageJson.scripts['package:dev:dir']).toContain('electron-builder.dev.cjs')
+    expect(developmentConfig).toContain("appId: 'io.dsh.desktop.dev'")
+    expect(developmentConfig).toContain("productName: 'DSH Desktop Dev'")
+    expect(developmentConfig).toContain("output: 'dist-dev'")
+    expect(developmentConfig).toContain("dshDesktopChannel: 'development'")
+    expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop-dev'))")
+    expect(main).toContain('if (!developmentBuild)')
+  })
+
   it('builds and publishes every supported platform', async () => {
     const workflow = await readFile(
       path.join(projectRoot, '.github', 'workflows', 'release.yml'),

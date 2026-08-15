@@ -1,14 +1,19 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js
-index 9f92ac8..321ea28 100644
+index 9f92ac8..69a0970 100644
 --- a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js
-@@ -64,7 +64,25 @@ window.__ModuleLoader__.load({
+@@ -64,7 +64,30 @@ window.__ModuleLoader__.load({
  			deleteTitle: "Delete this preset?",
  			deleteDescription: "The preset directory is deleted. Sessions already running on it keep working; new sessions cannot select it.",
  			deleteConfirm: "Delete",
 -			deleting: "Deleting…"
 +			deleting: "Deleting…",
-+			importPreset: "Import preset",
++			importPreset: "Import",
++			awesomePreset: "Awesome preset",
++			searchPresets: "Search modes…",
++			recentPresets: "Recent",
++			noMatchingPresets: "No matching modes",
++			browseAwesomePresets: "Browse Awesome Presets…",
 +			exportPreset: "Export preset",
 +			importTitle: "Review preset package",
 +			importIntro: "Check the package details and choose the local identifier before importing it.",
@@ -29,13 +34,18 @@ index 9f92ac8..321ea28 100644
  		};
  		/** Simplified Chinese copy. */
  		const zh = {
-@@ -120,7 +138,25 @@ window.__ModuleLoader__.load({
+@@ -120,7 +143,30 @@ window.__ModuleLoader__.load({
  			deleteTitle: "删除该预设？",
  			deleteDescription: "预设目录将被删除。已在其上运行的会话不受影响；新会话将无法再选择它。",
  			deleteConfirm: "删除",
 -			deleting: "正在删除…"
 +			deleting: "正在删除…",
-+			importPreset: "导入预设",
++			importPreset: "导入",
++			awesomePreset: "Awesome preset",
++			searchPresets: "搜索模式…",
++			recentPresets: "最近使用",
++			noMatchingPresets: "没有匹配的模式",
++			browseAwesomePresets: "浏览 Awesome Presets…",
 +			exportPreset: "导出预设",
 +			importTitle: "确认预设包",
 +			importIntro: "导入前请确认压缩包信息，并选择它在本机使用的标识符。",
@@ -56,7 +66,190 @@ index 9f92ac8..321ea28 100644
  		};
  		const BUILT_IN_PRESET_KEYS = {
  			standard: {
-@@ -707,6 +743,8 @@ window.__ModuleLoader__.load({
+@@ -333,7 +379,7 @@ window.__ModuleLoader__.load({
+ 		}
+ 		//#endregion
+ 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-agent-preset/src/client/AgentPresetSeat.module.css.mjs
+-		const css$1 = ".cubgiG_seat{max-width:min(100%,240px);min-height:28px;color:var(--dsw-alias-label-primary);white-space:nowrap;text-overflow:ellipsis;cursor:pointer;background:0 0;border:none;border-radius:16px;align-items:center;gap:4px;padding:0 8px;font-size:13px;font-weight:500;line-height:20px;display:inline-flex;overflow:hidden}.cubgiG_seat:not(:disabled):hover,.cubgiG_seat[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover)}.cubgiG_seat:disabled{cursor:default;color:var(--dsw-alias-label-quaternary)}.cubgiG_seatIcon{color:var(--dsw-alias-label-primary);flex:none}.cubgiG_introIcon{animation:.15s cubic-bezier(.16,1,.3,1) both cubgiG_seat-icon-in}@keyframes cubgiG_seat-icon-in{0%{opacity:0;transform:scale(.5)}to{opacity:1;transform:scale(1)}}.cubgiG_introText{white-space:pre;display:inline-block}.cubgiG_introChar{white-space:pre;opacity:0;animation:.4s ease-out forwards cubgiG_seat-char-in;display:inline-block}@keyframes cubgiG_seat-char-in{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}@media (prefers-reduced-motion:reduce){.cubgiG_introIcon,.cubgiG_introChar{opacity:1;animation:none}}.cubgiG_chevron{color:var(--dsw-alias-label-caption);flex:none}.cubgiG_item{flex-direction:column;gap:2px;max-width:280px;display:flex}.cubgiG_itemName{color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}.cubgiG_itemDesc{color:var(--dsw-alias-label-caption);white-space:normal;font-size:12px;line-height:16px}";
++		const css$1 = ".cubgiG_seat{max-width:min(100%,240px);min-height:28px;color:var(--dsw-alias-label-primary);white-space:nowrap;text-overflow:ellipsis;cursor:pointer;background:0 0;border:none;border-radius:16px;align-items:center;gap:4px;padding:0 8px;font-size:13px;font-weight:500;line-height:20px;display:inline-flex;overflow:hidden}.cubgiG_seat:not(:disabled):hover,.cubgiG_seat[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover)}.cubgiG_seat:disabled{cursor:default;color:var(--dsw-alias-label-quaternary)}.cubgiG_seatIcon{color:var(--dsw-alias-label-primary);flex:none}.cubgiG_introIcon{animation:.15s cubic-bezier(.16,1,.3,1) both cubgiG_seat-icon-in}@keyframes cubgiG_seat-icon-in{0%{opacity:0;transform:scale(.5)}to{opacity:1;transform:scale(1)}}.cubgiG_introText{white-space:pre;display:inline-block}.cubgiG_introChar{white-space:pre;opacity:0;animation:.4s ease-out forwards cubgiG_seat-char-in;display:inline-block}@keyframes cubgiG_seat-char-in{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}@media (prefers-reduced-motion:reduce){.cubgiG_introIcon,.cubgiG_introChar{opacity:1;animation:none}}.cubgiG_chevron{color:var(--dsw-alias-label-caption);flex:none}.cubgiG_picker{min-width:360px}.cubgiG_searchShell{box-sizing:border-box;width:100%;height:36px;color:var(--dsw-alias-label-caption);background:var(--dsw-alias-bg-module-platform);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;align-items:center;gap:8px;padding:0 10px;display:flex;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease}.cubgiG_searchShell:focus-within{background:var(--dsw-alias-bg-base);border-color:#4d6bfe;box-shadow:0 0 0 3px #4d6bfe1f}.cubgiG_searchIcon{flex:none}.cubgiG_search{min-width:0;width:100%;height:100%;color:var(--dsw-alias-label-primary);background:0 0;border:0;outline:0;padding:0;font:inherit}.cubgiG_search::-webkit-search-cancel-button{opacity:.55}.cubgiG_groupLabel{width:100%;color:var(--dsw-alias-label-caption);text-transform:none;letter-spacing:.02em;border-top:1px solid var(--dsw-alias-border-l3);padding-top:10px;font-size:11px;font-weight:500;line-height:16px;display:block}.cubgiG_item{box-sizing:border-box;flex-direction:column;gap:1px;width:336px;min-width:0;border-radius:9px;padding:7px 10px;display:flex;transition:background .12s ease,transform .12s ease}.cubgiG_item:hover{background:var(--dsw-alias-interactive-bg-hover)}.cubgiG_selectedItem{background:#4d6bfe12}.cubgiG_selectedItem:hover{background:#4d6bfe1c}.cubgiG_itemName{color:var(--dsw-alias-label-primary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden;font-size:13px;font-weight:500;line-height:19px}.cubgiG_itemDesc{color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden;font-size:12px;line-height:17px}.cubgiG_empty{color:var(--dsw-alias-label-caption);text-align:center;padding:20px 8px;display:block}.cubgiG_awesome{box-sizing:border-box;width:336px;color:#3154df;background:#4d6bfe0d;border-radius:9px;align-items:center;gap:8px;padding:9px 10px;font-weight:500;display:flex;transition:background .12s ease}.cubgiG_awesome:hover{background:#4d6bfe18}.cubgiG_awesomeIcon{flex:none}.cubgiG_awesomeText{flex:1}.cubgiG_awesomeArrow{opacity:.6;font-size:15px}[role=menu]:has(.cubgiG_searchShell){width:376px!important;max-width:calc(100vw - 24px);max-height:min(360px,calc(100vh - 24px))!important;border-radius:14px!important;box-shadow:0 18px 46px #0000001f,0 3px 10px #00000012!important;overflow:hidden}[role=menu]:has(.cubgiG_searchShell)>[role=presentation]:first-child{min-height:0;padding:8px!important;overflow-y:auto!important}[role=menu]:has(.cubgiG_searchShell) [role=menuitem]{border-radius:9px!important;margin:1px 0!important;padding:0!important}[role=menu]:has(.cubgiG_searchShell)>[role=presentation]:last-child{flex:none;padding:8px!important}@media (prefers-reduced-motion:reduce){.cubgiG_searchShell,.cubgiG_item,.cubgiG_awesome{transition:none}}";
+ 		const tagId$1 = "@deepseek-ai/dsh-client-ui-agent-preset/AgentPresetSeat.module.css";
+ 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
+ 			const tag = document.createElement("style");
+@@ -349,6 +395,17 @@ window.__ModuleLoader__.load({
+ 			"seat-icon-in": "cubgiG_seat-icon-in",
+ 			"item": "cubgiG_item",
+ 			"seat-char-in": "cubgiG_seat-char-in",
++			"picker": "cubgiG_picker",
++			"searchShell": "cubgiG_searchShell",
++			"searchIcon": "cubgiG_searchIcon",
++			"search": "cubgiG_search",
++			"groupLabel": "cubgiG_groupLabel",
++			"selectedItem": "cubgiG_selectedItem",
++			"empty": "cubgiG_empty",
++			"awesome": "cubgiG_awesome",
++			"awesomeIcon": "cubgiG_awesomeIcon",
++			"awesomeText": "cubgiG_awesomeText",
++			"awesomeArrow": "cubgiG_awesomeArrow",
+ 			"introIcon": "cubgiG_introIcon",
+ 			"itemDesc": "cubgiG_itemDesc",
+ 			"seatIcon": "cubgiG_seatIcon",
+@@ -374,6 +431,8 @@ window.__ModuleLoader__.load({
+ 		const INTRO_CHAR_STAGGER_MS = 40;
+ 		const INTRO_TEXT_REVEAL_MS = 200;
+ 		const INTRO_CHAR_FADE_MS = 400;
++		const RECENT_PRESETS_KEY = "dsh-agent-preset-recent";
++		const AWESOME_PRESETS_ID = "__awesome_presets__";
+ 		/**
+ 		* Per-character start offset for the introduce reveal.
+ 		* @param count - character count of the shown preset name.
+@@ -391,6 +450,15 @@ window.__ModuleLoader__.load({
+ 		function AgentPresetSeat({ load, select, introduced, useAgentPresetSeat, t }) {
+ 			const state = useAgentPresetSeat((snapshot) => snapshot);
+ 			const [open, setOpen] = (0, react.useState)(false);
++			const [query, setQuery] = (0, react.useState)("");
++			const [recentIds, setRecentIds] = (0, react.useState)(() => {
++				try {
++					const value = JSON.parse(window.localStorage.getItem(RECENT_PRESETS_KEY) ?? "[]");
++					return Array.isArray(value) ? value.filter((id) => typeof id === "string").slice(0, 4) : [];
++				} catch {
++					return [];
++				}
++			});
+ 			(0, react.useEffect)(() => {
+ 				load();
+ 			}, [load]);
+@@ -430,34 +498,114 @@ window.__ModuleLoader__.load({
+ 					children: character
+ 				}, index))
+ 			}) : label;
++			const normalizedQuery = query.trim().toLocaleLowerCase();
++			const matching = state.options.filter((option) => {
++				if (normalizedQuery === "") return true;
++				const text = presetDisplayText(option, t);
++				return `${text.name} ${text.description ?? ""} ${option.id}`.toLocaleLowerCase().includes(normalizedQuery);
++			});
++			const itemOf = (option) => {
++				const text = presetDisplayText(option, t);
++				return {
++					id: option.id,
++					label: (0, react_jsx_runtime.jsxs)("span", {
++						className: `${AgentPresetSeat_module_css_default.item} ${option.id === state.current ? AgentPresetSeat_module_css_default.selectedItem : ""}`,
++						children: [(0, react_jsx_runtime.jsx)("span", {
++							className: AgentPresetSeat_module_css_default.itemName,
++							children: text.name
++						}), (0, react_jsx_runtime.jsx)("span", {
++							className: AgentPresetSeat_module_css_default.itemDesc,
++							children: text.description ?? t("noDescription")
++						})]
++					})
++				};
++			};
++			const searchField = (0, react_jsx_runtime.jsxs)("span", {
++				className: AgentPresetSeat_module_css_default.searchShell,
++				children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutline16, {
++					size: 16,
++					className: AgentPresetSeat_module_css_default.searchIcon
++				}), (0, react_jsx_runtime.jsx)("input", {
++					className: AgentPresetSeat_module_css_default.search,
++					type: "search",
++					value: query,
++					autoFocus: true,
++					placeholder: t("searchPresets"),
++					"aria-label": t("searchPresets"),
++					onChange: (event) => {
++						setQuery(event.currentTarget.value);
++					},
++					onKeyDown: (event) => {
++						event.stopPropagation();
++					}
++				})]
++			});
++			const entries = [{
++				type: "label",
++				id: "preset-search",
++				text: searchField
++			}];
++			const addGroup = (id, title, options) => {
++				if (options.length === 0) return;
++				entries.push({
++					type: "label",
++					id: `${id}-label`,
++					text: (0, react_jsx_runtime.jsx)("span", { className: AgentPresetSeat_module_css_default.groupLabel, children: title })
++				}, ...options.map(itemOf));
++			};
++			const recentOptions = normalizedQuery === "" ? recentIds.map((id) => matching.find((option) => option.id === id)).filter((option) => option !== void 0) : [];
++			const recentSet = new Set(recentOptions.map((option) => option.id));
++			addGroup("recent", t("recentPresets"), recentOptions);
++			addGroup("built-in", t("builtInGroup"), matching.filter((option) => option.trust === "system" && !recentSet.has(option.id)));
++			addGroup("custom", t("customGroup"), matching.filter((option) => option.trust === "user" && !recentSet.has(option.id)));
++			if (matching.length === 0) entries.push({
++				type: "label",
++				id: "preset-empty",
++				text: (0, react_jsx_runtime.jsx)("span", { className: AgentPresetSeat_module_css_default.empty, children: t("noMatchingPresets") })
++			});
+ 			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+ 				open,
+ 				onClose: () => {
+ 					setOpen(false);
++					setQuery("");
+ 				},
+-				items: state.options.map((option) => {
+-					const text = presetDisplayText(option, t);
+-					return {
+-						id: option.id,
+-						label: (0, react_jsx_runtime.jsxs)("span", {
+-							className: AgentPresetSeat_module_css_default.item,
+-							children: [(0, react_jsx_runtime.jsx)("span", {
+-								className: AgentPresetSeat_module_css_default.itemName,
+-								children: text.name
+-							}), (0, react_jsx_runtime.jsx)("span", {
+-								className: AgentPresetSeat_module_css_default.itemDesc,
+-								children: text.description ?? t("noDescription")
+-							})]
+-						})
+-					};
+-				}),
++				items: entries,
++				footer: [{
++					id: AWESOME_PRESETS_ID,
++					label: (0, react_jsx_runtime.jsxs)("span", {
++						className: AgentPresetSeat_module_css_default.awesome,
++						children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSparkle16, {
++							size: 16,
++							className: AgentPresetSeat_module_css_default.awesomeIcon
++						}), (0, react_jsx_runtime.jsx)("span", {
++							className: AgentPresetSeat_module_css_default.awesomeText,
++							children: t("browseAwesomePresets")
++						}), (0, react_jsx_runtime.jsx)("span", {
++							className: AgentPresetSeat_module_css_default.awesomeArrow,
++							children: "→"
++						})]
++					})
++				}],
+ 				selectedId: state.current,
+ 				onSelect: (id) => {
+ 					setOpen(false);
++					setQuery("");
++					if (id === AWESOME_PRESETS_ID) {
++						window.open("https://www.dshdesktop.com/preset/", "_blank", "noopener,noreferrer");
++						return;
++					}
++					const nextRecent = [id, ...recentIds.filter((recentId) => recentId !== id)].slice(0, 4);
++					setRecentIds(nextRecent);
++					try {
++						window.localStorage.setItem(RECENT_PRESETS_KEY, JSON.stringify(nextRecent));
++					} catch {}
+ 					select(id);
+ 				},
+ 				align: "start",
++				side: "bottom",
+ 				portal: true,
++				compact: true,
++				className: AgentPresetSeat_module_css_default.picker,
+ 				anchor: (0, react_jsx_runtime.jsxs)("button", {
+ 					type: "button",
+ 					className: AgentPresetSeat_module_css_default.seat,
+@@ -707,6 +855,8 @@ window.__ModuleLoader__.load({
  			rows: [],
  			copy: null,
  			view: null,
@@ -65,7 +258,7 @@ index 9f92ac8..321ea28 100644
  			pendingDelete: null,
  			deleting: false,
  			revealedPaths: {}
-@@ -724,6 +762,13 @@ window.__ModuleLoader__.load({
+@@ -724,6 +874,13 @@ window.__ModuleLoader__.load({
  			if (!PRESET_ID.test(draft.id)) return "idInvalid";
  			if (rows.some((row) => row.id === draft.id)) return "idTaken";
  		}
@@ -79,7 +272,7 @@ index 9f92ac8..321ea28 100644
  		/** Reads the roster and drives the copy dialog, viewer, and location reveals. */
  		var AgentPresetSectionController = class {
  			api;
-@@ -911,6 +956,143 @@ window.__ModuleLoader__.load({
+@@ -911,6 +1068,143 @@ window.__ModuleLoader__.load({
  					this.set({ error: messageOf(error) });
  				}
  			}
@@ -223,7 +416,7 @@ index 9f92ac8..321ea28 100644
  			/**
  			* Ask for confirmation before deleting one preset.
  			* @param id - the preset to delete, or null to dismiss the confirmation.
-@@ -974,17 +1156,23 @@ window.__ModuleLoader__.load({
+@@ -974,17 +1268,24 @@ window.__ModuleLoader__.load({
  		};
  		//#endregion
  		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-agent-preset/src/client/AgentPresetSection.module.css.mjs
@@ -235,12 +428,13 @@ index 9f92ac8..321ea28 100644
  			tag.dataset.plugin = "@deepseek-ai/dsh-client-ui-agent-preset";
  			tag.dataset.pluginCss = tagId;
 -			tag.textContent = css;
-+			tag.textContent = `${css}.rtSEdW_importButton{margin-right:12px}`;
++			tag.textContent = `${css}.rtSEdW_sectionActions{flex:none;align-items:center;gap:8px;margin-right:12px;display:flex}`;
  			document.head.appendChild(tag);
  		}
  		var AgentPresetSection_module_css_default = {
  			"cardMain": "rtSEdW_cardMain",
 +			"sectionHead": "rtSEdW_sectionHead",
++			"sectionActions": "rtSEdW_sectionActions",
 +			"importButton": "rtSEdW_importButton",
 +			"hiddenInput": "rtSEdW_hiddenInput",
 +			"importSecurity": "rtSEdW_importSecurity",
@@ -249,7 +443,7 @@ index 9f92ac8..321ea28 100644
  			"field": "rtSEdW_field",
  			"cardDesc": "rtSEdW_cardDesc",
  			"dialog": "rtSEdW_dialog",
-@@ -1104,6 +1292,84 @@ window.__ModuleLoader__.load({
+@@ -1104,6 +1405,84 @@ window.__ModuleLoader__.load({
  				})
  			});
  		}
@@ -334,7 +528,7 @@ index 9f92ac8..321ea28 100644
  		/**
  		* Render one card's description, clamped by CSS and offered in full on hover.
  		* The tooltip is attached only while the text is actually cut off, so a short
-@@ -1151,6 +1417,7 @@ window.__ModuleLoader__.load({
+@@ -1151,6 +1530,7 @@ window.__ModuleLoader__.load({
  		function AgentPresetSection(props) {
  			const { useAgentPresetSection, t, load } = props;
  			const state = useAgentPresetSection((snapshot) => snapshot);
@@ -342,7 +536,7 @@ index 9f92ac8..321ea28 100644
  			const viewedId = state.view?.id;
  			const viewedRow = viewedId === void 0 ? void 0 : state.rows.find((row) => row.id === viewedId);
  			const viewedTitle = state.view === null ? "" : viewedRow === void 0 ? state.view.title : presetDisplayText(viewedRow, t).name;
-@@ -1191,9 +1458,31 @@ window.__ModuleLoader__.load({
+@@ -1191,9 +1571,40 @@ window.__ModuleLoader__.load({
  			return (0, react_jsx_runtime.jsxs)("div", {
  				className: AgentPresetSection_module_css_default.section,
  				children: [
@@ -354,7 +548,9 @@ index 9f92ac8..321ea28 100644
 +						children: [(0, react_jsx_runtime.jsx)("h2", {
 +							className: AgentPresetSection_module_css_default.title,
 +							children: t("nav")
-+						}), (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)("input", {
++						}), (0, react_jsx_runtime.jsxs)("div", {
++							className: AgentPresetSection_module_css_default.sectionActions,
++							children: [(0, react_jsx_runtime.jsx)("input", {
 +							ref: importInput,
 +							type: "file",
 +							accept: ".dshpreset,application/vnd.dsh.preset+zip,application/zip",
@@ -373,11 +569,18 @@ index 9f92ac8..321ea28 100644
 +								importInput.current?.click();
 +							},
 +							children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconArchiveOutline20, { size: 16 }), t("importPreset")]
-+						})] })]
++						}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
++							variant: "outline",
++							onClick: () => {
++								window.open("https://www.dshdesktop.com/preset/", "_blank", "noopener,noreferrer");
++							},
++							children: t("awesomePreset")
++						})]
++						})]
  					}),
  					(0, react_jsx_runtime.jsx)("p", {
  						className: AgentPresetSection_module_css_default.intro,
-@@ -1289,7 +1578,7 @@ window.__ModuleLoader__.load({
+@@ -1289,7 +1700,7 @@ window.__ModuleLoader__.load({
  														},
  														children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderOpenOutline16, {})
  													}),
@@ -386,7 +589,7 @@ index 9f92ac8..321ea28 100644
  														type: "button",
  														className: AgentPresetSection_module_css_default.iconButton,
  														disabled: !state.authorable || row.broken !== void 0,
-@@ -1298,9 +1587,20 @@ window.__ModuleLoader__.load({
+@@ -1298,9 +1709,20 @@ window.__ModuleLoader__.load({
  														onClick: () => {
  															props.beginCopy(row.id);
  														},
@@ -410,7 +613,7 @@ index 9f92ac8..321ea28 100644
  														type: "button",
  														className: `${AgentPresetSection_module_css_default.iconButton} ${AgentPresetSection_module_css_default.iconDanger}`,
  														"data-tip": t("delete"),
-@@ -1329,13 +1629,22 @@ window.__ModuleLoader__.load({
+@@ -1329,13 +1751,22 @@ window.__ModuleLoader__.load({
  					(0, react_jsx_runtime.jsx)(CopyDialog, {
  						state,
  						t,
@@ -436,7 +639,7 @@ index 9f92ac8..321ea28 100644
  					(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
  						open: state.view !== null,
  						onClose: () => {
-@@ -1689,6 +1998,15 @@ window.__ModuleLoader__.load({
+@@ -1689,6 +2120,15 @@ window.__ModuleLoader__.load({
  				},
  				confirmCopy: () => section.confirmCopy(),
  				openLocation: (id) => section.openLocation(id),
