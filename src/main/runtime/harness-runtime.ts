@@ -1,15 +1,15 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createWriteStream, existsSync, type WriteStream } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
+import type { ForkOptions, UtilityProcess } from 'electron'
 import type { RuntimePhase, RuntimeSnapshot } from '../../shared/contracts'
 
 export interface HarnessRuntimeOptions {
   dshEntryPath: string
   dshHome: string
   logPath: string
-  nodeExecutable: string
+  launchProcess(modulePath: string, args: string[], options: ForkOptions): UtilityProcess
   startupTimeoutMs?: number
   onChanged(snapshot: RuntimeSnapshot): void
 }
@@ -18,14 +18,33 @@ export function buildHarnessArguments(port: number): string[] {
   return ['web', '--host', '127.0.0.1', '--port', String(port)]
 }
 
-export function buildNodeArguments(dshEntryPath: string, port: number): string[] {
-  // Cordis HMR needs access to Node's internal ESM loader. This flag is only
-  // granted to the isolated Harness child process, never to the renderer.
-  return ['--expose-internals', dshEntryPath, ...buildHarnessArguments(port)]
+export function buildHarnessForkOptions(
+  launchDirectory: string,
+  dshHome: string,
+  platform: NodeJS.Platform = process.platform,
+  environment: NodeJS.ProcessEnv = process.env
+): ForkOptions {
+  const { ELECTRON_RUN_AS_NODE: _runAsNode, ...parentEnvironment } = environment
+  const pathKey = platform === 'win32' ? 'Path' : 'PATH'
+
+  return {
+    cwd: launchDirectory,
+    env: {
+      ...parentEnvironment,
+      DSH_HOME: dshHome,
+      NO_COLOR: '1',
+      [pathKey]: environment[pathKey] ?? environment.PATH ?? ''
+    },
+    // Cordis HMR needs access to Node's internal ESM loader. This flag is only
+    // granted to the isolated Harness utility process, never to the renderer.
+    execArgv: ['--expose-internals'],
+    stdio: 'pipe',
+    serviceName: 'DSH Harness'
+  }
 }
 
 export class HarnessRuntime {
-  private child?: ChildProcessWithoutNullStreams
+  private child?: UtilityProcess
   private logStream?: WriteStream
   private phase: RuntimePhase = 'idle'
   private message = 'Harness is not running.'
@@ -61,45 +80,43 @@ export class HarnessRuntime {
 
     const port = await reservePort()
     const url = `http://127.0.0.1:${port}`
-    const args = buildNodeArguments(this.options.dshEntryPath, port)
-    const pathKey = process.platform === 'win32' ? 'Path' : 'PATH'
+    const args = buildHarnessArguments(port)
 
     this.writeLog(`\n[desktop] starting ${new Date().toISOString()}`)
     this.writeLog(`[desktop] launch directory ${launchDirectory}`)
     this.writeLog(`[desktop] endpoint ${url}`)
     this.setState('starting', 'Starting DeepSeek Harness…')
 
-    const child = spawn(this.options.nodeExecutable, args, {
-      cwd: launchDirectory,
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: '1',
-        DSH_HOME: this.options.dshHome,
-        NO_COLOR: '1',
-        [pathKey]: process.env[pathKey] ?? process.env.PATH ?? ''
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true
-    })
+    let child: UtilityProcess
+    try {
+      child = this.options.launchProcess(
+        this.options.dshEntryPath,
+        args,
+        buildHarnessForkOptions(launchDirectory, this.options.dshHome)
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.writeLog(`[utility] launch failed: ${message}`)
+      this.setState('failed', `Harness could not start: ${message}`)
+      return
+    }
     this.child = child
 
-    child.stdout.on('data', (chunk: Buffer) => this.writeChunk('stdout', chunk))
-    child.stderr.on('data', (chunk: Buffer) => this.writeChunk('stderr', chunk))
-    child.once('error', (error) => {
-      if (this.child !== child) return
-      this.child = undefined
-      this.setState('failed', `Harness could not start: ${error.message}`)
+    child.stdout?.on('data', (chunk: Buffer) => this.writeChunk('stdout', chunk))
+    child.stderr?.on('data', (chunk: Buffer) => this.writeChunk('stderr', chunk))
+    child.once('spawn', () => this.writeLog('[desktop] Harness utility process started'))
+    child.once('error', (type, location) => {
+      this.writeLog(`[utility] ${type}${location.length > 0 ? ` at ${location}` : ''}`)
     })
-    child.once('exit', (code, signal) => {
+    child.once('exit', (code) => {
       if (this.child !== child) return
       this.child = undefined
-      const detail = signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`
-      this.setState('failed', `Harness stopped unexpectedly (${detail}).`)
+      this.setState('failed', `Harness stopped unexpectedly (${formatExitCode(code)}).`)
     })
 
     const ready = await waitUntilReady(
       url,
-      () => this.child === child && child.exitCode === null,
+      () => this.child === child,
       this.options.startupTimeoutMs ?? 45_000
     )
 
@@ -130,14 +147,23 @@ export class HarnessRuntime {
     this.setState('idle', 'Harness is not running.')
   }
 
-  private async stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-    if (child.exitCode !== null) return
-    child.kill('SIGTERM')
+  private async stopChild(child: UtilityProcess): Promise<void> {
+    if (child.pid === undefined) return
+    const exitPromise = new Promise<boolean>((resolve) =>
+      child.once('exit', () => resolve(true))
+    )
+    child.kill()
     const exited = await Promise.race([
-      new Promise<boolean>((resolve) => child.once('exit', () => resolve(true))),
+      exitPromise,
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000))
     ])
-    if (!exited && child.exitCode === null) child.kill('SIGKILL')
+    if (!exited && child.pid !== undefined) {
+      try {
+        process.kill(child.pid, 'SIGKILL')
+      } catch {
+        // The utility process may have exited between the timeout and this check.
+      }
+    }
   }
 
   private setState(phase: RuntimePhase, message: string): void {
@@ -162,6 +188,15 @@ export class HarnessRuntime {
     this.logStream?.end()
     this.logStream = undefined
   }
+}
+
+export function formatExitCode(code: number): string {
+  const unsigned = code >>> 0
+  const hexadecimal = `0x${unsigned.toString(16).padStart(8, '0').toUpperCase()}`
+  if (unsigned === 0xffff7003) {
+    return `exit code ${unsigned} (${hexadecimal}, Crashpad handler unavailable)`
+  }
+  return `exit code ${code} (${hexadecimal})`
 }
 
 async function reservePort(): Promise<number> {

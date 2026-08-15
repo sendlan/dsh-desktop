@@ -7,6 +7,7 @@ import {
   Menu,
   nativeTheme,
   shell,
+  utilityProcess,
   type MessageBoxOptions
 } from 'electron'
 import { HarnessRuntime } from './runtime/harness-runtime'
@@ -310,7 +311,8 @@ async function bootstrap(): Promise<void> {
     dshEntryPath: dshEntryPath(),
     dshHome: join(app.getPath('userData'), 'harness'),
     logPath: join(app.getPath('logs'), 'harness.log'),
-    nodeExecutable: process.execPath,
+    launchProcess: (modulePath, args, options) =>
+      utilityProcess.fork(modulePath, args, options),
     onChanged: (snapshot) => {
       if (snapshot.phase === 'ready' && snapshot.url) {
         void openHarness(snapshot.url).catch(showUnexpectedError)

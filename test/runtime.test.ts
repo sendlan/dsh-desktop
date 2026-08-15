@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { buildHarnessArguments, buildNodeArguments } from '../src/main/runtime/harness-runtime'
+import {
+  buildHarnessArguments,
+  buildHarnessForkOptions,
+  formatExitCode
+} from '../src/main/runtime/harness-runtime'
 import { canGrantWindowPermission, isTrustedAppUrl } from '../src/main/security-policy'
 import {
   isAbortedNavigationError,
@@ -17,16 +21,36 @@ describe('Harness launch contract', () => {
     ])
   })
 
-  it('grants Node internals only to the Harness child process', () => {
-    expect(buildNodeArguments('/runtime/dsh.js', 43127)).toEqual([
-      '--expose-internals',
-      '/runtime/dsh.js',
-      'web',
-      '--host',
-      '127.0.0.1',
-      '--port',
-      '43127'
-    ])
+  it('launches Harness as an isolated Electron utility process', () => {
+    const options = buildHarnessForkOptions(
+      'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\launch-root',
+      'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\harness',
+      'win32',
+      {
+        ELECTRON_RUN_AS_NODE: '1',
+        PATH: 'fallback-path',
+        Path: 'windows-path'
+      }
+    )
+
+    expect(options).toMatchObject({
+      cwd: 'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\launch-root',
+      execArgv: ['--expose-internals'],
+      stdio: 'pipe',
+      serviceName: 'DSH Harness',
+      env: {
+        DSH_HOME: 'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\harness',
+        NO_COLOR: '1',
+        Path: 'windows-path'
+      }
+    })
+    expect(options.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
+  })
+
+  it('makes native Windows termination codes diagnosable', () => {
+    expect(formatExitCode(4294930435)).toContain(
+      '0xFFFF7003, Crashpad handler unavailable'
+    )
   })
 })
 
