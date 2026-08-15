@@ -50,6 +50,11 @@ function configureAppIdentity(): void {
   }
 
   app.setName('DSH Desktop')
+  // Keep the historical lowercase directory stable across product-name and
+  // branding changes. Harness stores workspaces, sessions, credentials, and
+  // custom presets below userData, so deriving this path from app.getName()
+  // would make an ordinary upgrade look like a fresh installation.
+  app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop'))
 }
 
 async function syncNativeTheme(window: BrowserWindow): Promise<void> {
