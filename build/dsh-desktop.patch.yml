@@ -6,3 +6,10 @@
 - insert:
     - id: directory-picker-native-desktop
       name: '@deepseek-ai/dsh-host-directory-picker-native'
+
+    # The native interaction has a second, renderless client row. Without it
+    # ui-workspace has no directory-flow occupant, so every workspace picker
+    # entry point becomes inert or disappears even though the Host capability
+    # itself is running.
+    - id: directory-picker-native-desktop-surface
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-native'

@@ -89,6 +89,7 @@ describe('GitHub release contract', () => {
     expect(splash).toContain('prefers-reduced-motion')
     expect(patch).toMatch(/id: directory-picker\r?\n  disabled: true/)
     expect(patch).toContain("name: '@deepseek-ai/dsh-host-directory-picker-native'")
+    expect(patch).toContain("name: '@deepseek-ai/dsh-client-ui-directory-picker-native'")
   })
 
   it('publishes update metadata for installed desktop builds', async () => {
