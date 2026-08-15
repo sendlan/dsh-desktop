@@ -60,11 +60,36 @@ describe('GitHub release contract', () => {
       from: 'build/app-icon.png',
       to: 'icon.png'
     })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/splash.html',
+      to: 'splash.html'
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/dsh-desktop.patch.yml',
+      to: 'dsh-desktop.patch.yml'
+    })
     expect(packageJson.build.nsis.artifactName).toBe(
       'dsh-desktop-windows-${arch}-setup.${ext}'
     )
     expect(packageJson.build.win.target).toEqual([{ target: 'nsis', arch: ['x64'] }])
     expect(packageJson.build.portable).toBeUndefined()
+  })
+
+  it('shows a packaged startup surface and pins the native directory picker', async () => {
+    const main = await readFile(path.join(projectRoot, 'src', 'main', 'index.ts'), 'utf8')
+    const splash = await readFile(path.join(projectRoot, 'build', 'splash.html'), 'utf8')
+    const patch = await readFile(
+      path.join(projectRoot, 'build', 'dsh-desktop.patch.yml'),
+      'utf8'
+    )
+
+    expect(main).toContain("desktopResourcePath('splash.html')")
+    expect(main).toContain('await showSplash()')
+    expect(splash).toContain('Starting DSH Desktop')
+    expect(splash).toContain('prefers-reduced-motion')
+    expect(patch).toMatch(/id: directory-picker\r?\n  disabled: true/)
+    expect(patch).toContain("name: '@deepseek-ai/dsh-host-directory-picker-native'")
+    expect(patch).toContain("name: '@deepseek-ai/dsh-client-ui-directory-picker-native'")
   })
 
   it('publishes update metadata for installed desktop builds', async () => {
@@ -128,10 +153,16 @@ describe('GitHub release contract', () => {
 
     expect(packageJson.scripts['package:dev:dir']).toContain('npm run build')
     expect(packageJson.scripts['package:dev:dir']).toContain('electron-builder.dev.cjs')
+    expect(packageJson.scripts['package:dev:win']).toContain('verify-target.mjs win32 x64')
+    expect(packageJson.scripts['package:dev:win']).toContain('electron-builder.dev.cjs')
+    expect(packageJson.scripts['package:dev:win']).toContain('--publish never')
     expect(developmentConfig).toContain("appId: 'io.dsh.desktop.dev'")
     expect(developmentConfig).toContain("productName: 'DSH Desktop Dev'")
     expect(developmentConfig).toContain("output: 'dist-dev'")
     expect(developmentConfig).toContain("dshDesktopChannel: 'development'")
+    expect(developmentConfig).toContain(
+      "artifactName: 'dsh-desktop-dev-windows-${arch}-setup.${ext}'"
+    )
     expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop-dev'))")
     expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop'))")
     expect(main).toContain('if (!developmentBuild)')
@@ -146,6 +177,17 @@ describe('GitHub release contract', () => {
     expect(workflow).toContain('runs-on: macos-15')
     expect(workflow).toContain('runs-on: macos-15-intel')
     expect(workflow).toContain('runs-on: windows-2022')
+    expect(workflow).toContain('npm run package:dev:win')
+    expect(workflow).toContain('Smoke test packaged Windows Harness')
+    expect(workflow).toContain("$executable = 'dist-dev\\win-unpacked\\DSH Desktop Dev.exe'")
+    expect(workflow).toContain('Packaged Windows Harness smoke test passed.')
+    expect(workflow).toContain('Harness reported stderr after HTTP became ready')
+    expect(workflow).toContain('windows_prerelease_tag:')
+    expect(workflow).toContain('Publish validated Windows development pre-release')
+    expect(workflow).toContain('gh release create $env:PRERELEASE_TAG')
+    expect(workflow).toContain('--prerelease')
+    expect(workflow).toContain('name: windows-x64-dev')
+    expect(workflow).toContain('dist-dev/dsh-desktop-dev-windows-x64-setup.exe')
     for (const asset of releaseAssets) expect(workflow).toContain(asset)
     expect(
       workflow.match(

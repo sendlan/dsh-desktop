@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from 'node:child_process'
 import { createWriteStream, existsSync, type WriteStream } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { createServer } from 'node:net'
@@ -7,21 +7,65 @@ import type { RuntimePhase, RuntimeSnapshot } from '../../shared/contracts'
 
 export interface HarnessRuntimeOptions {
   dshEntryPath: string
+  nodeExecutablePath: string
+  nodeEntryPath: string
+  dshPatchPath: string
   dshHome: string
   logPath: string
-  nodeExecutable: string
+  launchProcess(
+    executablePath: string,
+    args: string[],
+    options: SpawnOptionsWithoutStdio
+  ): ChildProcessWithoutNullStreams
   startupTimeoutMs?: number
   onChanged(snapshot: RuntimeSnapshot): void
 }
 
-export function buildHarnessArguments(port: number): string[] {
-  return ['web', '--host', '127.0.0.1', '--port', String(port)]
+export function buildHarnessArguments(port: number, patchPath?: string): string[] {
+  return [
+    'web',
+    ...(patchPath ? ['--patch', patchPath] : []),
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(port)
+  ]
 }
 
-export function buildNodeArguments(dshEntryPath: string, port: number): string[] {
-  // Cordis HMR needs access to Node's internal ESM loader. This flag is only
-  // granted to the isolated Harness child process, never to the renderer.
-  return ['--expose-internals', dshEntryPath, ...buildHarnessArguments(port)]
+export function buildHarnessSpawnOptions(
+  launchDirectory: string,
+  dshHome: string,
+  platform: NodeJS.Platform = process.platform,
+  environment: NodeJS.ProcessEnv = process.env
+): SpawnOptionsWithoutStdio {
+  const { ELECTRON_RUN_AS_NODE: _runAsNode, ...parentEnvironment } = environment
+  const pathKey = platform === 'win32' ? 'Path' : 'PATH'
+
+  return {
+    cwd: launchDirectory,
+    env: {
+      ...parentEnvironment,
+      DSH_HOME: dshHome,
+      NO_COLOR: '1',
+      [pathKey]: environment[pathKey] ?? environment.PATH ?? ''
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true
+  }
+}
+
+export function buildNodeArguments(
+  nodeEntryPath: string,
+  dshEntryPath: string,
+  port: number,
+  patchPath?: string
+): string[] {
+  return [
+    '--expose-internals',
+    nodeEntryPath,
+    dshEntryPath,
+    ...buildHarnessArguments(port, patchPath)
+  ]
 }
 
 export class HarnessRuntime {
@@ -54,6 +98,18 @@ export class HarnessRuntime {
       this.setState('failed', `Harness entry was not found: ${this.options.dshEntryPath}`)
       return
     }
+    if (!existsSync(this.options.nodeExecutablePath)) {
+      this.setState('failed', `Bundled Node.js runtime was not found: ${this.options.nodeExecutablePath}`)
+      return
+    }
+    if (!existsSync(this.options.nodeEntryPath)) {
+      this.setState('failed', `Harness diagnostic entry was not found: ${this.options.nodeEntryPath}`)
+      return
+    }
+    if (!existsSync(this.options.dshPatchPath)) {
+      this.setState('failed', `DSH Desktop patch was not found: ${this.options.dshPatchPath}`)
+      return
+    }
 
     await mkdir(this.options.dshHome, { recursive: true })
     await mkdir(dirname(this.options.logPath), { recursive: true })
@@ -61,52 +117,70 @@ export class HarnessRuntime {
 
     const port = await reservePort()
     const url = `http://127.0.0.1:${port}`
-    const args = buildNodeArguments(this.options.dshEntryPath, port)
-    const pathKey = process.platform === 'win32' ? 'Path' : 'PATH'
+    const args = buildNodeArguments(
+      this.options.nodeEntryPath,
+      this.options.dshEntryPath,
+      port,
+      this.options.dshPatchPath
+    )
+    const startupTimeoutMs =
+      this.options.startupTimeoutMs ?? (process.platform === 'win32' ? 120_000 : 45_000)
 
     this.writeLog(`\n[desktop] starting ${new Date().toISOString()}`)
     this.writeLog(`[desktop] launch directory ${launchDirectory}`)
     this.writeLog(`[desktop] endpoint ${url}`)
     this.setState('starting', 'Starting DeepSeek Harness…')
 
-    const child = spawn(this.options.nodeExecutable, args, {
-      cwd: launchDirectory,
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: '1',
-        DSH_HOME: this.options.dshHome,
-        NO_COLOR: '1',
-        [pathKey]: process.env[pathKey] ?? process.env.PATH ?? ''
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true
-    })
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = this.options.launchProcess(
+        this.options.nodeExecutablePath,
+        args,
+        buildHarnessSpawnOptions(launchDirectory, this.options.dshHome)
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.writeLog(`[utility] launch failed: ${message}`)
+      this.setState('failed', `Harness could not start: ${message}`)
+      return
+    }
     this.child = child
 
     child.stdout.on('data', (chunk: Buffer) => this.writeChunk('stdout', chunk))
     child.stderr.on('data', (chunk: Buffer) => this.writeChunk('stderr', chunk))
+    child.once('spawn', () => this.writeLog('[desktop] Bundled Node.js Harness process started'))
     child.once('error', (error) => {
+      this.writeLog(`[node] ${error.stack ?? error.message}`)
       if (this.child !== child) return
       this.child = undefined
       this.setState('failed', `Harness could not start: ${error.message}`)
     })
     child.once('exit', (code, signal) => {
+      const detail = signal ? `signal ${signal}` : formatExitCode(code ?? -1)
+      this.writeLog(`[node] Harness process exited (${detail})`)
       if (this.child !== child) return
       this.child = undefined
-      const detail = signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`
       this.setState('failed', `Harness stopped unexpectedly (${detail}).`)
     })
 
+    const startedAt = Date.now()
+    const progressTimer = setInterval(
+      () => this.writeLog(`[desktop] waiting for Harness (${Math.round((Date.now() - startedAt) / 1000)}s)`),
+      10_000
+    )
     const ready = await waitUntilReady(
       url,
       () => this.child === child && child.exitCode === null,
-      this.options.startupTimeoutMs ?? 45_000
-    )
+      startupTimeoutMs
+    ).finally(() => clearInterval(progressTimer))
 
     if (this.child !== child) return
     if (!ready) {
       await this.stopChild(child)
-      this.setState('failed', 'Harness did not become ready within 45 seconds.')
+      this.setState(
+        'failed',
+        `Harness did not become ready within ${Math.round(startupTimeoutMs / 1000)} seconds.`
+      )
       return
     }
 
@@ -132,9 +206,12 @@ export class HarnessRuntime {
 
   private async stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
     if (child.exitCode !== null) return
+    const exitPromise = new Promise<boolean>((resolve) =>
+      child.once('exit', () => resolve(true))
+    )
     child.kill('SIGTERM')
     const exited = await Promise.race([
-      new Promise<boolean>((resolve) => child.once('exit', () => resolve(true))),
+      exitPromise,
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000))
     ])
     if (!exited && child.exitCode === null) child.kill('SIGKILL')
@@ -162,6 +239,15 @@ export class HarnessRuntime {
     this.logStream?.end()
     this.logStream = undefined
   }
+}
+
+export function formatExitCode(code: number): string {
+  const unsigned = code >>> 0
+  const hexadecimal = `0x${unsigned.toString(16).padStart(8, '0').toUpperCase()}`
+  if (unsigned === 0xffff7003) {
+    return `exit code ${unsigned} (${hexadecimal}, Crashpad handler unavailable)`
+  }
+  return `exit code ${code} (${hexadecimal})`
 }
 
 async function reservePort(): Promise<number> {

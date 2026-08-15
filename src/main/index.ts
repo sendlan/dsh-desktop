@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import {
@@ -109,6 +110,21 @@ function dshEntryPath(): string {
   return join(app.getAppPath(), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 }
 
+function bundledNodePath(): string {
+  const executable = process.platform === 'win32' ? 'node.exe' : 'node'
+  return join(app.getAppPath(), 'node_modules', 'node', 'bin', executable)
+}
+
+function harnessNodeEntryPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'harness-node-entry.mjs')
+    : join(app.getAppPath(), 'build', 'harness-node-entry.mjs')
+}
+
+function desktopResourcePath(name: string): string {
+  return app.isPackaged ? join(process.resourcesPath, name) : join(app.getAppPath(), 'build', name)
+}
+
 function desktopIconPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
@@ -167,8 +183,16 @@ async function openHarness(url: string): Promise<void> {
   window.focus()
 }
 
+async function showSplash(): Promise<void> {
+  const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
+  await window.loadFile(desktopResourcePath('splash.html'))
+  if (window.isDestroyed()) return
+  window.show()
+  window.focus()
+}
+
 async function launchHarness(): Promise<void> {
-  mainWindow?.hide()
+  await showSplash()
   await runtime.start(launchDirectory)
 }
 
@@ -308,9 +332,12 @@ async function bootstrap(): Promise<void> {
   createWindow()
   runtime = new HarnessRuntime({
     dshEntryPath: dshEntryPath(),
+    nodeExecutablePath: bundledNodePath(),
+    nodeEntryPath: harnessNodeEntryPath(),
+    dshPatchPath: desktopResourcePath('dsh-desktop.patch.yml'),
     dshHome: join(app.getPath('userData'), 'harness'),
     logPath: join(app.getPath('logs'), 'harness.log'),
-    nodeExecutable: process.execPath,
+    launchProcess: (executablePath, args, options) => spawn(executablePath, args, options),
     onChanged: (snapshot) => {
       if (snapshot.phase === 'ready' && snapshot.url) {
         void openHarness(snapshot.url).catch(showUnexpectedError)

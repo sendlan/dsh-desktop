@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildHarnessArguments, buildNodeArguments } from '../src/main/runtime/harness-runtime'
+import {
+  buildHarnessArguments,
+  buildHarnessSpawnOptions,
+  buildNodeArguments,
+  formatExitCode
+} from '../src/main/runtime/harness-runtime'
 import { canGrantWindowPermission, isTrustedAppUrl } from '../src/main/security-policy'
 import {
   isAbortedNavigationError,
@@ -17,16 +22,69 @@ describe('Harness launch contract', () => {
     ])
   })
 
-  it('grants Node internals only to the Harness child process', () => {
-    expect(buildNodeArguments('/runtime/dsh.js', 43127)).toEqual([
-      '--expose-internals',
-      '/runtime/dsh.js',
+  it('applies the desktop composition patch before web arguments', () => {
+    expect(buildHarnessArguments(43127, 'C:\\app\\dsh-desktop.patch.yml')).toEqual([
       'web',
+      '--patch',
+      'C:\\app\\dsh-desktop.patch.yml',
       '--host',
       '127.0.0.1',
       '--port',
       '43127'
     ])
+  })
+
+  it('launches Harness with the bundled Node.js runtime', () => {
+    const options = buildHarnessSpawnOptions(
+      'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\launch-root',
+      'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\harness',
+      'win32',
+      {
+        ELECTRON_RUN_AS_NODE: '1',
+        PATH: 'fallback-path',
+        Path: 'windows-path'
+      }
+    )
+
+    expect(options).toMatchObject({
+      cwd: 'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\launch-root',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: {
+        DSH_HOME: 'C:\\Users\\tester\\AppData\\Roaming\\dsh-desktop\\harness',
+        NO_COLOR: '1',
+        Path: 'windows-path'
+      }
+    })
+    expect(options.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
+  })
+
+  it('passes the internal-loader flag directly to bundled Node.js', () => {
+    expect(
+      buildNodeArguments(
+        'C:\\app\\harness-node-entry.mjs',
+        'C:\\app\\dsh\\lib\\bin.js',
+        43127,
+        'C:\\app\\dsh-desktop.patch.yml'
+      )
+    ).toEqual([
+      '--expose-internals',
+      'C:\\app\\harness-node-entry.mjs',
+      'C:\\app\\dsh\\lib\\bin.js',
+      'web',
+      '--patch',
+      'C:\\app\\dsh-desktop.patch.yml',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '43127'
+    ])
+  })
+
+  it('makes native Windows termination codes diagnosable', () => {
+    expect(formatExitCode(4294930435)).toContain(
+      '0xFFFF7003, Crashpad handler unavailable'
+    )
   })
 })
 

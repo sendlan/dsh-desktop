@@ -33,6 +33,7 @@
     "test:watch": "vitest",
     "package:dir": "npm run build && electron-builder --dir",
     "package:dev:dir": "npm run build && electron-builder --dir --config electron-builder.dev.cjs",
+    "package:dev:win": "node scripts/verify-target.mjs win32 x64 && npm run build && electron-builder --win --x64 --publish never --config electron-builder.dev.cjs",
     "package:mac": "npm run build && electron-builder --mac --publish never",
     "package:mac:arm64": "node scripts/verify-target.mjs darwin arm64 && npm run build && electron-builder --mac --arm64 --publish never",
     "package:mac:x64": "node scripts/verify-target.mjs darwin x64 && npm run build && electron-builder --mac --x64 --publish never",
@@ -59,7 +60,8 @@
     "@deepseek-ai/dsh-subprocess": "0.1.0-rc.6",
     "@deepseek-ai/dsh-timeout": "0.1.0-rc.6",
     "@deepseek-ai/dsh-workflow": "0.1.0-rc.6",
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "node": "24.9.0"
   },
   "devDependencies": {
     "@types/node": "24.10.1",
@@ -89,6 +91,18 @@
       {
         "from": "build/app-icon.png",
         "to": "icon.png"
+      },
+      {
+        "from": "build/harness-node-entry.mjs",
+        "to": "harness-node-entry.mjs"
+      },
+      {
+        "from": "build/dsh-desktop.patch.yml",
+        "to": "dsh-desktop.patch.yml"
+      },
+      {
+        "from": "build/splash.html",
+        "to": "splash.html"
       }
     ],
     "publish": [
