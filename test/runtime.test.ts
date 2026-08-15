@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { buildHarnessArguments, buildNodeArguments } from '../src/main/runtime/harness-runtime'
 import { canGrantWindowPermission, isTrustedAppUrl } from '../src/main/security-policy'
-import { shouldLoadHarnessUrl } from '../src/main/window-navigation'
+import {
+  isAbortedNavigationError,
+  shouldLoadHarnessUrl
+} from '../src/main/window-navigation'
 
 describe('Harness launch contract', () => {
   it('binds the web server to a random loopback port', () => {
@@ -90,5 +93,17 @@ describe('Harness window activation', () => {
     expect(
       shouldLoadHarnessUrl('http://127.0.0.1:43127/settings', 'http://127.0.0.1:43128')
     ).toBe(true)
+  })
+
+  it('recognizes Electron navigation cancellation without hiding other load failures', () => {
+    expect(isAbortedNavigationError({ code: 'ERR_ABORTED', errno: -3 })).toBe(true)
+    expect(
+      isAbortedNavigationError(
+        new Error("ERR_ABORTED (-3) loading 'http://127.0.0.1:43127/'")
+      )
+    ).toBe(true)
+    expect(isAbortedNavigationError({ code: 'ERR_CONNECTION_REFUSED', errno: -102 })).toBe(
+      false
+    )
   })
 })

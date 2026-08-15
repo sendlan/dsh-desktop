@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import {
   app,
   BrowserWindow,
@@ -11,7 +12,7 @@ import {
 import { HarnessRuntime } from './runtime/harness-runtime'
 import { secureWindow } from './security'
 import { ensureLaunchRoot } from './state/launch-root'
-import { shouldLoadHarnessUrl } from './window-navigation'
+import { isAbortedNavigationError, shouldLoadHarnessUrl } from './window-navigation'
 import {
   checkForUpdates,
   registerUpdateHandlers,
@@ -26,14 +27,64 @@ let launchDirectory: string
 let quitting = false
 let failureDialogVisible = false
 
+function isDevelopmentBuild(): boolean {
+  if (!app.isPackaged) return true
+
+  try {
+    const metadata = JSON.parse(
+      readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')
+    ) as { dshDesktopChannel?: unknown }
+    return metadata.dshDesktopChannel === 'development'
+  } catch {
+    return false
+  }
+}
+
+const developmentBuild = isDevelopmentBuild()
+
+function configureAppIdentity(): void {
+  if (developmentBuild) {
+    app.setName('DSH Desktop Dev')
+    app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop-dev'))
+    return
+  }
+
+  app.setName('DSH Desktop')
+}
+
 async function syncNativeTheme(window: BrowserWindow): Promise<void> {
   if (window.isDestroyed()) return
 
   // The sidebar already reserves enough room for macOS traffic lights. Read
   // Harness's resolved theme before showing the window so the native surface
-  // matches the first rendered frame without injecting a second titlebar.
+  // matches the first rendered frame. The transparent drag strip restores the
+  // native window gesture without adding a visual titlebar or covering the
+  // traffic lights and right-side header actions.
   const isDark = await window.webContents.executeJavaScript(
-    "document.body.hasAttribute('data-ds-dark-theme')"
+    `(() => {
+      if (${process.platform === 'darwin'}) {
+        let dragRegion = document.getElementById('dsh-desktop-drag-region')
+        if (!dragRegion) {
+          dragRegion = document.createElement('div')
+          dragRegion.id = 'dsh-desktop-drag-region'
+          dragRegion.setAttribute('aria-hidden', 'true')
+          Object.assign(dragRegion.style, {
+            position: 'fixed',
+            zIndex: '18',
+            top: '0',
+            left: '80px',
+            right: '220px',
+            height: '24px',
+            background: 'transparent',
+            pointerEvents: 'auto',
+            userSelect: 'none'
+          })
+          dragRegion.style.setProperty('-webkit-app-region', 'drag')
+          document.body.appendChild(dragRegion)
+        }
+      }
+      return document.body.hasAttribute('data-ds-dark-theme')
+    })()`
   )
   window.setBackgroundColor(isDark ? '#141416' : '#ffffff')
 }
@@ -97,7 +148,12 @@ function createWindow(): BrowserWindow {
 async function openHarness(url: string): Promise<void> {
   const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
   if (shouldLoadHarnessUrl(window.webContents.getURL(), url)) {
-    await window.loadURL(url)
+    try {
+      await window.loadURL(url)
+    } catch (error) {
+      if (isAbortedNavigationError(error)) return
+      throw error
+    }
   }
   if (runtime.snapshot().url !== url || window.isDestroyed()) return
   await syncNativeTheme(window)
@@ -260,20 +316,22 @@ async function bootstrap(): Promise<void> {
   })
   installMenu()
   await launchHarness()
-  startUpdateManager({
-    prepareToInstall: async () => {
-      await runtime.stop()
-      quitting = true
-      stopUpdateManager()
-    }
-  })
+  if (!developmentBuild) {
+    startUpdateManager({
+      prepareToInstall: async () => {
+        await runtime.stop()
+        quitting = true
+        stopUpdateManager()
+      }
+    })
+  }
 }
 
+configureAppIdentity()
 const singleInstance = app.requestSingleInstanceLock()
 if (!singleInstance) {
   app.quit()
 } else {
-  app.setName('DSH Desktop')
   app.on('second-instance', () => {
     const snapshot = runtime?.snapshot()
     if (snapshot?.phase === 'ready' && snapshot.url) {

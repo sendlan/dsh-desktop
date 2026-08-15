@@ -16,6 +16,11 @@ describe('DSH Desktop sidebar branding', () => {
     expect(main).not.toContain('dsh-desktop-titlebar-style')
     expect(main).not.toContain('--dsh-desktop-titlebar-height')
     expect(main).not.toContain('body { box-sizing: border-box; padding-top:')
+    expect(main).toContain("dragRegion.id = 'dsh-desktop-drag-region'")
+    expect(main).toContain("dragRegion.style.setProperty('-webkit-app-region', 'drag')")
+    expect(main).toContain("left: '80px'")
+    expect(main).toContain("right: '220px'")
+    expect(main).toContain("height: '24px'")
   })
 
   it('pairs the DSH logo with the original Harness wordmark in the expanded sidebar', async () => {
