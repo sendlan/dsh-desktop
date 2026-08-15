@@ -156,6 +156,7 @@ describe('GitHub release contract', () => {
     expect(workflow).toContain('Smoke test packaged Windows Harness')
     expect(workflow).toContain("$executable = 'dist-dev\\win-unpacked\\DSH Desktop Dev.exe'")
     expect(workflow).toContain('Packaged Windows Harness smoke test passed.')
+    expect(workflow).toContain('Harness worker reported a fatal startup error')
     expect(workflow).toContain('name: windows-x64-dev')
     expect(workflow).toContain('dist-dev/dsh-desktop-dev-windows-x64-setup.exe')
     for (const asset of releaseAssets) expect(workflow).toContain(asset)

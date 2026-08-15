@@ -14,6 +14,13 @@ if (!dshEntryPath) {
   process.stderr.write('[harness-worker] missing DSH entry path\n')
   process.exitCode = 1
 } else {
+  if (!process.execArgv.includes('--expose-internals')) {
+    // Electron's utility process applies the flag but does not consistently
+    // retain it in process.execArgv on Windows. Cordis uses this marker before
+    // probing the internal ESM loader, so restore the marker for that probe.
+    process.execArgv.push('--expose-internals')
+  }
+  process.stdout.write(`[harness-worker] execArgv ${JSON.stringify(process.execArgv)}\n`)
   process.stdout.write(`[harness-worker] loading ${dshEntryPath}\n`)
   process.argv = [process.execPath, dshEntryPath, ...dshArguments]
   import(pathToFileURL(dshEntryPath).href)

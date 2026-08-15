@@ -297,6 +297,14 @@ jobs:
                   try {
                     $response = Invoke-WebRequest -UseBasicParsing -Uri $match.Groups[1].Value -TimeoutSec 2
                     if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
+                      Start-Sleep -Seconds 5
+                      $stableLog = Get-Content -Raw $logPath
+                      if ($stableLog -match '\[harness-worker\].*(could not load|uncaught|unhandled)') {
+                        throw 'Harness worker reported a fatal startup error after HTTP became ready.'
+                      }
+                      if ($desktop.HasExited) {
+                        throw "DSH Desktop Dev exited after Harness became ready (exit code $($desktop.ExitCode))."
+                      }
                       $ready = $true
                       break
                     }

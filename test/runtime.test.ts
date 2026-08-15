@@ -52,6 +52,7 @@ describe('Harness launch contract', () => {
   it('ships a CommonJS worker that reports ESM entry loading failures', () => {
     const worker = readFileSync(join(process.cwd(), 'build', 'harness-worker.cjs'), 'utf8')
     expect(worker).toContain("import(pathToFileURL(dshEntryPath).href)")
+    expect(worker).toContain("process.execArgv.push('--expose-internals')")
     expect(worker).toContain("reportError('could not load DSH entry', error)")
   })
 
