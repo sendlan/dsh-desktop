@@ -98,7 +98,7 @@ describe('GitHub release contract', () => {
     ) as {
       dependencies: Record<string, string>
       build: {
-        publish: Array<{ provider: string; url: string }>
+        publish: Array<{ provider: string; url?: string; owner?: string; repo?: string }>
         win: { verifyUpdateCodeSignature: boolean }
       }
     }
