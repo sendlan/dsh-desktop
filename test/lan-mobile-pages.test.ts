@@ -32,10 +32,17 @@ describe('LAN mobile page', () => {
     expect(html).toContain('maximum-scale=1')
     expect(html).toContain("chunk.type!=='reasoning-delta'")
     expect(html).toContain('class=\"thinking\"')
+    expect(html).toContain("streamKey=kind+':'+String(chunk.index??0)")
+    expect(html).toContain("(streaming?' open':'')")
+    expect(html).toContain('key=JSON.stringify(messages)')
     expect(html).toContain('class=\"tool\"')
     expect(html).toContain('function markdown(text)')
     expect(html).toContain('visualViewport')
     expect(html).toContain('var(--app-height,100dvh)')
+    expect(html).toContain('id=\"workspaceHint\"')
+    expect(html).toContain('id=\"newSession\" class=\"new-session\" disabled')
+    expect(html).toContain('@keyframes connectedPulse')
+    expect(html).not.toContain('Connected on local network')
   })
 
   it('uses DSH styling on both pairing surfaces', () => {
