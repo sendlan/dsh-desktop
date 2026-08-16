@@ -78,6 +78,9 @@ describe('LAN mobile page', () => {
     }
     expect(desktop).toContain('/desktop/disconnect')
     expect(desktop).toContain('Phone connected')
+    expect(desktop).toContain('You can close this window now.')
+    expect(desktop).toContain('onclick="window.close()">Done</button>')
+    expect(desktop).toContain("document.body.classList.toggle('phone-connected'")
   })
 
   it('localizes both pairing surfaces from the desktop preference', () => {
@@ -91,6 +94,8 @@ describe('LAN mobile page', () => {
     expect(desktop).toContain('<html lang="zh-CN">')
     expect(desktop).toContain('连接你的手机')
     expect(desktop).toContain('断开连接')
+    expect(desktop).toContain('现在可以关闭此窗口。')
+    expect(desktop).toContain('onclick="window.close()">完成</button>')
     expect(phone).toContain('请在 DSH Desktop 中确认连接请求。')
   })
 })
