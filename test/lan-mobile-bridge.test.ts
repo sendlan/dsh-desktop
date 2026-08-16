@@ -101,6 +101,13 @@ describe('LAN mobile bridge pairing surface', () => {
     expect(await paired.clone().json()).toEqual({ approved: true })
     const cookie = paired.headers.get('set-cookie')!.split(';', 1)[0]!
 
+    const rescanned = await fetch(
+      `http://127.0.0.1:${snapshot.port}/pair?token=${token}`,
+      { headers: { cookie }, redirect: 'manual' }
+    )
+    expect(rescanned.status).toBe(302)
+    expect(rescanned.headers.get('location')).toBe('/')
+
     const forwarded = await fetch(`http://127.0.0.1:${snapshot.port}/api/rpc`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json' },

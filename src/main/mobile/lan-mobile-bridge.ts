@@ -206,6 +206,12 @@ export class LanMobileBridge {
     }
 
     if (request.method === 'GET' && url.pathname === '/pair') {
+      if (this.authorized(request)) {
+        response.statusCode = 302
+        response.setHeader('location', '/')
+        response.end()
+        return
+      }
       if (!this.validPairingToken(url.searchParams.get('token'))) {
         return this.text(response, 401, 'This pairing link is invalid or expired.')
       }
