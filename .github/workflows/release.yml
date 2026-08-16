@@ -338,8 +338,8 @@ jobs:
             --repo $env:GITHUB_REPOSITORY `
             --target $env:GITHUB_SHA `
             --prerelease `
-            --title 'DSH Desktop Windows Harness Test' `
-            --notes "Windows x64 development build for validating the Harness startup fix from PR #39. This build uses an isolated app identity and user data directory, and has passed the packaged Windows Harness smoke test." `
+            --title 'DSH Desktop Windows Development Test' `
+            --notes "Windows x64 development build for validating commit $env:GITHUB_SHA. This build uses an isolated app identity and user data directory, and has passed the packaged Windows Harness smoke test." `
             'dist-dev/dsh-desktop-dev-windows-x64-setup.exe#DSH Desktop Dev Windows x64 Setup'
       - uses: actions/upload-artifact@v4
         if: startsWith(github.ref, 'refs/tags/v')
