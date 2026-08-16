@@ -1,16 +1,19 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
+import { parse } from 'yaml'
 import {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
   Menu,
   nativeTheme,
   shell,
   type MessageBoxOptions
 } from 'electron'
 import { HarnessRuntime } from './runtime/harness-runtime'
+import { LanMobileBridge } from './mobile/lan-mobile-bridge'
 import { secureWindow } from './security'
 import { ensureLaunchRoot } from './state/launch-root'
 import { isAbortedNavigationError, shouldLoadHarnessUrl } from './window-navigation'
@@ -23,7 +26,9 @@ import {
 import type { RuntimeSnapshot } from '../shared/contracts'
 
 let mainWindow: BrowserWindow | undefined
+let mobileWindow: BrowserWindow | undefined
 let runtime: HarnessRuntime
+let mobileBridge: LanMobileBridge
 let launchDirectory: string
 let quitting = false
 let failureDialogVisible = false
@@ -129,6 +134,28 @@ function desktopIconPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
     : join(app.getAppPath(), 'build', 'app-icon.png')
+}
+
+function dshBrandLogoPath(variant: 'light' | 'dark'): string {
+  return join(
+    app.getAppPath(),
+    'node_modules',
+    '@deepseek-ai',
+    'dsh-web-frontend',
+    'dist',
+    `dsh-desktop-logo-${variant}.png`
+  )
+}
+
+function harnessLocale(): 'en' | 'zh' {
+  try {
+    const settings = parse(
+      readFileSync(join(app.getPath('userData'), 'harness', 'settings.yaml'), 'utf8')
+    ) as { locale?: { preference?: unknown } }
+    return settings.locale?.preference === 'zh' ? 'zh' : 'en'
+  } catch {
+    return app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en'
+  }
 }
 
 function createWindow(): BrowserWindow {
@@ -243,7 +270,8 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
 }
 
 function installMenu(): void {
-  const checkForUpdatesLabel = app.getLocale().toLowerCase().startsWith('zh')
+  const isChinese = app.getLocale().toLowerCase().startsWith('zh')
+  const checkForUpdatesLabel = isChinese
     ? '检查更新…'
     : 'Check for Updates…'
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -271,6 +299,12 @@ function installMenu(): void {
     {
       label: 'Harness',
       submenu: [
+        {
+          label: isChinese ? '连接手机…' : 'Connect Phone…',
+          accelerator: 'CmdOrCtrl+Shift+M',
+          click: () => void showMobilePairing().catch(showUnexpectedError)
+        },
+        { type: 'separator' },
         {
           label: 'Restart Harness',
           accelerator: 'CmdOrCtrl+Shift+R',
@@ -325,6 +359,56 @@ function installMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
+async function showMobilePairing(): Promise<void> {
+  if (runtime.snapshot().phase !== 'ready') {
+    const options: MessageBoxOptions = {
+      type: 'info',
+      message: 'Harness is still starting.',
+      detail: 'Wait until DSH Desktop is ready, then connect your phone again.',
+      buttons: ['OK']
+    }
+    await (mainWindow ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options))
+    return
+  }
+
+  const snapshot = await mobileBridge.start()
+  if (!snapshot.desktopUrl || !snapshot.pairingUrl) {
+    await mobileBridge.stop()
+    const options: MessageBoxOptions = {
+      type: 'warning',
+      message: 'No private Wi-Fi network was found.',
+      detail: 'Connect this computer to the same private Wi-Fi as your phone and try again.',
+      buttons: ['OK']
+    }
+    await (mainWindow ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options))
+    return
+  }
+
+  if (mobileWindow && !mobileWindow.isDestroyed()) mobileWindow.destroy()
+  mobileWindow = new BrowserWindow({
+    width: 560,
+    height: 700,
+    minWidth: 420,
+    minHeight: 560,
+    title: harnessLocale() === 'zh' ? '连接手机' : 'Connect Phone',
+    icon: desktopIconPath(),
+    parent: mainWindow,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true
+    }
+  })
+  secureWindow(mobileWindow)
+  mobileWindow.on('closed', () => {
+    mobileWindow = undefined
+  })
+  await mobileWindow.loadURL(snapshot.desktopUrl)
+  mobileWindow.show()
+  mobileWindow.focus()
+}
+
 async function bootstrap(): Promise<void> {
   if (process.platform === 'darwin') app.dock?.setIcon(desktopIconPath())
   launchDirectory = await ensureLaunchRoot(app.getPath('userData'))
@@ -346,6 +430,18 @@ async function bootstrap(): Promise<void> {
       }
     }
   })
+  mobileBridge = new LanMobileBridge({
+    harnessUrl: () => runtime.snapshot().url,
+    locale: harnessLocale,
+    brandLogoPaths: {
+      light: dshBrandLogoPath('light'),
+      dark: dshBrandLogoPath('dark')
+    },
+    appIconPath: desktopIconPath(),
+    port: developmentBuild ? 43128 : 43127
+  })
+  ipcMain.handle('mobile:open-pairing', () => showMobilePairing())
+  ipcMain.handle('mobile:status', () => ({ connected: mobileBridge.snapshot().connected }))
   installMenu()
   await launchHarness()
   if (!developmentBuild) {
@@ -390,6 +486,6 @@ if (!singleInstance) {
     event.preventDefault()
     quitting = true
     stopUpdateManager()
-    void runtime.stop().finally(() => app.quit())
+    void Promise.all([runtime.stop(), mobileBridge?.stop()]).finally(() => app.quit())
   })
 }
