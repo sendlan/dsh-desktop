@@ -423,7 +423,9 @@ async function bootstrap(): Promise<void> {
     brandLogoPaths: {
       light: dshBrandLogoPath('light'),
       dark: dshBrandLogoPath('dark')
-    }
+    },
+    appIconPath: desktopIconPath(),
+    port: developmentBuild ? 43128 : 43127
   })
   installMenu()
   await launchHarness()

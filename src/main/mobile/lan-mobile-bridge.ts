@@ -8,7 +8,6 @@ import { renderDesktopPairingPage, renderMobilePage, renderPairingWaitPage } fro
 
 const MAX_BODY_BYTES = 64 * 1024
 const PAIRING_TTL_MS = 5 * 60 * 1000
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000
 
 const RPC_ALLOWLIST = new Set([
   'workspace.list',
@@ -23,6 +22,8 @@ export interface LanMobileBridgeOptions {
   harnessUrl(): string | undefined
   locale?: 'en' | 'zh'
   brandLogoPaths?: { light: string; dark: string }
+  appIconPath?: string
+  port?: number
   now?: () => number
 }
 
@@ -36,7 +37,6 @@ export interface LanMobileBridgeSnapshot {
 
 interface MobileSession {
   token: string
-  expiresAt: number
 }
 
 interface PendingPairing {
@@ -60,7 +60,11 @@ export class LanMobileBridge {
   }
 
   async start(): Promise<LanMobileBridgeSnapshot> {
-    await this.stop()
+    if (this.server) {
+      this.rotatePairingToken()
+      this.pendingPairings.clear()
+      return this.snapshot()
+    }
     this.rotatePairingToken()
     this.server = createServer((request, response) => {
       void this.handle(request, response).catch((error: unknown) => {
@@ -70,7 +74,7 @@ export class LanMobileBridge {
     })
     await new Promise<void>((resolve, reject) => {
       this.server?.once('error', reject)
-      this.server?.listen(0, '0.0.0.0', resolve)
+      this.server?.listen(this.options.port ?? 0, '0.0.0.0', resolve)
     })
     this.port = (this.server.address() as AddressInfo).port
     return this.snapshot()
@@ -138,6 +142,21 @@ export class LanMobileBridge {
       return
     }
 
+    if (request.method === 'GET' && url.pathname === '/app-icon') {
+      const path = this.options.appIconPath
+      if (!path) return this.text(response, 404, 'App icon not found.')
+      try {
+        const body = await readFile(path)
+        response.statusCode = 200
+        response.setHeader('content-type', 'image/png')
+        response.setHeader('cache-control', 'public, max-age=86400')
+        response.end(body)
+      } catch {
+        this.text(response, 404, 'App icon not found.')
+      }
+      return
+    }
+
     if (request.method === 'GET' && url.pathname === '/desktop') {
       if (!isLoopbackAddress(remoteAddress)) return this.text(response, 403, 'Desktop only.')
       const snapshot = this.snapshot()
@@ -159,6 +178,19 @@ export class LanMobileBridge {
         (item) => item.decision === undefined && item.expiresAt >= this.now()
       )
       return this.json(response, 200, pending ? { id: pending.id, remoteAddress: pending.remoteAddress } : {})
+    }
+
+    if (request.method === 'GET' && url.pathname === '/desktop/status') {
+      if (!isLoopbackAddress(remoteAddress)) return this.text(response, 403, 'Desktop only.')
+      return this.json(response, 200, { connected: this.sessions.size > 0 })
+    }
+
+    if (request.method === 'POST' && url.pathname === '/desktop/disconnect') {
+      if (!isLoopbackAddress(remoteAddress)) return this.text(response, 403, 'Desktop only.')
+      this.sessions.clear()
+      this.pendingPairings.clear()
+      this.rotatePairingToken()
+      return this.json(response, 200, { ok: true })
     }
 
     if (request.method === 'POST' && url.pathname === '/desktop/decide') {
@@ -197,11 +229,12 @@ export class LanMobileBridge {
       }
       if (pending.decision !== true) return this.json(response, 200, { pending: true })
       const token = randomBytes(32).toString('base64url')
-      this.sessions.set(token, { token, expiresAt: this.now() + SESSION_TTL_MS })
+      this.sessions.clear()
+      this.sessions.set(token, { token })
       this.pendingPairings.delete(pending.id)
       this.pairingToken = undefined
       this.pairingExpiresAt = undefined
-      response.setHeader('set-cookie', `dsh_mobile=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`)
+      response.setHeader('set-cookie', `dsh_mobile=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`)
       return this.json(response, 200, { approved: true })
     }
 
@@ -233,12 +266,7 @@ export class LanMobileBridge {
     const cookie = request.headers.cookie ?? ''
     const match = /(?:^|;\s*)dsh_mobile=([^;]+)/.exec(cookie)
     if (!match) return false
-    const session = this.sessions.get(match[1]!)
-    if (!session || session.expiresAt < this.now()) {
-      if (session) this.sessions.delete(session.token)
-      return false
-    }
-    return true
+    return this.sessions.has(match[1]!)
   }
 
   private verifySameOrigin(request: IncomingMessage): void {

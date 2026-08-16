@@ -112,11 +112,31 @@ describe('LAN mobile bridge pairing surface', () => {
       value: { items: [], archivedSessionIds: [] }
     })
 
+    const sameBridge = await bridge.start()
+    expect(sameBridge.port).toBe(snapshot.port)
+    const stillAuthorized = await fetch(`http://127.0.0.1:${snapshot.port}/api/rpc`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'workspace.list', payload: {} })
+    })
+    expect(stillAuthorized.status).toBe(200)
+
+    const status = await fetch(`http://127.0.0.1:${snapshot.port}/desktop/status`)
+    expect(await status.json()).toEqual({ connected: true })
+
     const blocked = await fetch(`http://127.0.0.1:${snapshot.port}/api/rpc`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json' },
       body: JSON.stringify({ method: 'host.openPath', payload: { path: '/tmp/secret' } })
     })
     expect(blocked.status).toBe(403)
+
+    await fetch(`http://127.0.0.1:${snapshot.port}/desktop/disconnect`, { method: 'POST' })
+    const disconnected = await fetch(`http://127.0.0.1:${snapshot.port}/api/rpc`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'workspace.list', payload: {} })
+    })
+    expect(disconnected.status).toBe(401)
   })
 })

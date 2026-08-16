@@ -30,6 +30,8 @@ describe('LAN mobile page', () => {
     expect(html).toContain("block?.type==='text'")
     expect(html).toContain('font-size:16px')
     expect(html).toContain('maximum-scale=1')
+    expect(html).toContain('rel="apple-touch-icon" href="/app-icon"')
+    expect(html).toContain('apple-mobile-web-app-capable')
     expect(html).toContain("chunk.type!=='reasoning-delta'")
     expect(html).toContain('class=\"thinking\"')
     expect(html).toContain("streamKey=kind+':'+String(chunk.index??0)")
@@ -70,5 +72,7 @@ describe('LAN mobile page', () => {
       ))
         expect(() => new Function(script)).not.toThrow()
     }
+    expect(desktop).toContain('/desktop/disconnect')
+    expect(desktop).toContain('Phone connected')
   })
 })
