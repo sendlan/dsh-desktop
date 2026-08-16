@@ -2,6 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import type { AddressInfo } from 'node:net'
+import { readFile } from 'node:fs/promises'
 import QRCode from 'qrcode'
 import { renderDesktopPairingPage, renderMobilePage, renderPairingWaitPage } from './lan-mobile-pages'
 
@@ -21,6 +22,7 @@ const RPC_ALLOWLIST = new Set([
 export interface LanMobileBridgeOptions {
   harnessUrl(): string | undefined
   locale?: 'en' | 'zh'
+  brandLogoPaths?: { light: string; dark: string }
   now?: () => number
 }
 
@@ -119,6 +121,22 @@ export class LanMobileBridge {
     const remoteAddress = normalizeRemoteAddress(request.socket.remoteAddress ?? '')
     if (!isPrivateAddress(remoteAddress)) return this.text(response, 403, 'Private network only.')
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+
+    if (request.method === 'GET' && url.pathname.startsWith('/brand-logo/')) {
+      const variant = url.pathname === '/brand-logo/dark' ? 'dark' : 'light'
+      const path = this.options.brandLogoPaths?.[variant]
+      if (!path) return this.text(response, 404, 'Brand asset not found.')
+      try {
+        const body = await readFile(path)
+        response.statusCode = 200
+        response.setHeader('content-type', 'image/png')
+        response.setHeader('cache-control', 'public, max-age=3600')
+        response.end(body)
+      } catch {
+        this.text(response, 404, 'Brand asset not found.')
+      }
+      return
+    }
 
     if (request.method === 'GET' && url.pathname === '/desktop') {
       if (!isLoopbackAddress(remoteAddress)) return this.text(response, 403, 'Desktop only.')

@@ -134,6 +134,17 @@ function desktopIconPath(): string {
     : join(app.getAppPath(), 'build', 'app-icon.png')
 }
 
+function dshBrandLogoPath(variant: 'light' | 'dark'): string {
+  return join(
+    app.getAppPath(),
+    'node_modules',
+    '@deepseek-ai',
+    'dsh-web-frontend',
+    'dist',
+    `dsh-desktop-logo-${variant}.png`
+  )
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1380,
@@ -408,7 +419,11 @@ async function bootstrap(): Promise<void> {
   })
   mobileBridge = new LanMobileBridge({
     harnessUrl: () => runtime.snapshot().url,
-    locale: app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en'
+    locale: app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en',
+    brandLogoPaths: {
+      light: dshBrandLogoPath('light'),
+      dark: dshBrandLogoPath('dark')
+    }
   })
   installMenu()
   await launchHarness()
