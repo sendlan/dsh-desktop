@@ -170,7 +170,8 @@ export class LanMobileBridge {
           qrSvg,
           pairingUrl: snapshot.pairingUrl,
           expiresAt: snapshot.expiresAt,
-          locale: this.locale()
+          locale: this.locale(),
+          connected: this.sessions.size > 0
         })
       )
     }

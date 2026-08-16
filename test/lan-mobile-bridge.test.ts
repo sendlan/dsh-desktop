@@ -130,6 +130,8 @@ describe('LAN mobile bridge pairing surface', () => {
 
     const status = await fetch(`http://127.0.0.1:${snapshot.port}/desktop/status`)
     expect(await status.json()).toEqual({ connected: true })
+    const managementPage = await fetch(`http://127.0.0.1:${snapshot.port}/desktop`)
+    expect(await managementPage.text()).toContain('Manage phone connection')
     const mobileStatus = await fetch(`http://127.0.0.1:${snapshot.port}/api/status`, {
       headers: { cookie }
     })

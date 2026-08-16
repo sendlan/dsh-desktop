@@ -65,7 +65,8 @@ describe('LAN mobile page', () => {
       qrSvg: '<svg></svg>',
       pairingUrl: 'http://192.168.1.2/pair?token=test',
       expiresAt: Date.now() + 60_000,
-      locale: 'en'
+      locale: 'en',
+      connected: false
     })
     const phone = renderPairingWaitPage('pairing-id', 'en')
     for (const html of [desktop, phone]) {
@@ -88,7 +89,8 @@ describe('LAN mobile page', () => {
       qrSvg: '<svg></svg>',
       pairingUrl: 'http://192.168.1.2/pair?token=test',
       expiresAt: Date.now() + 60_000,
-      locale: 'zh'
+      locale: 'zh',
+      connected: false
     })
     const phone = renderPairingWaitPage('pairing-id', 'zh')
     expect(desktop).toContain('<html lang="zh-CN">')
@@ -97,5 +99,19 @@ describe('LAN mobile page', () => {
     expect(desktop).toContain('现在可以关闭此窗口。')
     expect(desktop).toContain('onclick="window.close()">完成</button>')
     expect(phone).toContain('请在 DSH Desktop 中确认连接请求。')
+  })
+
+  it('renders a compact management state when a phone is already connected', () => {
+    const desktop = renderDesktopPairingPage({
+      qrSvg: '<svg></svg>',
+      pairingUrl: 'http://192.168.1.2/pair?token=test',
+      expiresAt: Date.now() + 60_000,
+      locale: 'en',
+      connected: true
+    })
+    expect(desktop).toContain('class="phone-connected manage-connected"')
+    expect(desktop).toContain('Manage phone connection')
+    expect(desktop).toContain('Your phone is currently connected to DSH Desktop.')
+    expect(desktop).toContain('.manage-connected .connection-hint,.manage-connected .done{display:none}')
   })
 })
