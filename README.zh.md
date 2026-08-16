@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="build/icon.png" width="64" alt="DSH Desktop logo" valign="middle" />
+  <img src="docs/images/readme-logo-black-v020.png" width="64" alt="DSH Desktop logo" valign="middle" />
   DSH Desktop
 </h1>
 
@@ -18,7 +18,7 @@
   <img alt="Windows" src="https://img.shields.io/badge/Windows-x64-171513.svg" />
 </p>
 
-![DSH Desktop 模型提供方设置界面](docs/images/model-provider-settings-v011.png)
+![DSH Desktop 的 Preset、模型提供方与手机控制能力](docs/images/dsh-desktop-hero-v020.png)
 
 <p align="center"><strong>除了 DeepSeek 官方模型，DSH Desktop 也支持主流第三方模型提供方。更多基于 DSH 的有趣桌面体验即将推出。</strong></p>
 
