@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
+import { parse } from 'yaml'
 import {
   app,
   BrowserWindow,
@@ -144,6 +145,17 @@ function dshBrandLogoPath(variant: 'light' | 'dark'): string {
     'dist',
     `dsh-desktop-logo-${variant}.png`
   )
+}
+
+function harnessLocale(): 'en' | 'zh' {
+  try {
+    const settings = parse(
+      readFileSync(join(app.getPath('userData'), 'harness', 'settings.yaml'), 'utf8')
+    ) as { locale?: { preference?: unknown } }
+    return settings.locale?.preference === 'zh' ? 'zh' : 'en'
+  } catch {
+    return app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en'
+  }
 }
 
 function createWindow(): BrowserWindow {
@@ -378,7 +390,7 @@ async function showMobilePairing(): Promise<void> {
     height: 700,
     minWidth: 420,
     minHeight: 560,
-    title: 'Connect Phone',
+    title: harnessLocale() === 'zh' ? '连接手机' : 'Connect Phone',
     icon: desktopIconPath(),
     parent: mainWindow,
     webPreferences: {
@@ -420,7 +432,7 @@ async function bootstrap(): Promise<void> {
   })
   mobileBridge = new LanMobileBridge({
     harnessUrl: () => runtime.snapshot().url,
-    locale: app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en',
+    locale: harnessLocale,
     brandLogoPaths: {
       light: dshBrandLogoPath('light'),
       dark: dshBrandLogoPath('dark')

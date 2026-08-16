@@ -123,6 +123,11 @@ describe('LAN mobile bridge pairing surface', () => {
 
     const status = await fetch(`http://127.0.0.1:${snapshot.port}/desktop/status`)
     expect(await status.json()).toEqual({ connected: true })
+    const mobileStatus = await fetch(`http://127.0.0.1:${snapshot.port}/api/status`, {
+      headers: { cookie }
+    })
+    expect(mobileStatus.status).toBe(200)
+    expect(await mobileStatus.json()).toEqual({ connected: true })
 
     const blocked = await fetch(`http://127.0.0.1:${snapshot.port}/api/rpc`, {
       method: 'POST',
@@ -138,5 +143,9 @@ describe('LAN mobile bridge pairing surface', () => {
       body: JSON.stringify({ method: 'workspace.list', payload: {} })
     })
     expect(disconnected.status).toBe(401)
+    const disconnectedStatus = await fetch(`http://127.0.0.1:${snapshot.port}/api/status`, {
+      headers: { cookie }
+    })
+    expect(disconnectedStatus.status).toBe(401)
   })
 })

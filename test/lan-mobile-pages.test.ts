@@ -55,15 +55,19 @@ describe('LAN mobile page', () => {
     expect(html).not.toContain("esc(s.cwd||s.sessionId)")
     expect(html).toContain('@keyframes connectedPulse')
     expect(html).not.toContain('Connected on local network')
+    expect(html).toContain("fetch('/api/status',{cache:'no-store'})")
+    expect(html).toContain('setInterval(checkConnection,1500)')
+    expect(html).toContain("status.classList.add('error-state')")
   })
 
   it('uses DSH styling on both pairing surfaces', () => {
     const desktop = renderDesktopPairingPage({
       qrSvg: '<svg></svg>',
       pairingUrl: 'http://192.168.1.2/pair?token=test',
-      expiresAt: Date.now() + 60_000
+      expiresAt: Date.now() + 60_000,
+      locale: 'en'
     })
-    const phone = renderPairingWaitPage('pairing-id')
+    const phone = renderPairingWaitPage('pairing-id', 'en')
     for (const html of [desktop, phone]) {
       expect(html).toContain('--brand:#4d6bfe')
       expect(html).toContain('/brand-logo/light')
@@ -74,5 +78,19 @@ describe('LAN mobile page', () => {
     }
     expect(desktop).toContain('/desktop/disconnect')
     expect(desktop).toContain('Phone connected')
+  })
+
+  it('localizes both pairing surfaces from the desktop preference', () => {
+    const desktop = renderDesktopPairingPage({
+      qrSvg: '<svg></svg>',
+      pairingUrl: 'http://192.168.1.2/pair?token=test',
+      expiresAt: Date.now() + 60_000,
+      locale: 'zh'
+    })
+    const phone = renderPairingWaitPage('pairing-id', 'zh')
+    expect(desktop).toContain('<html lang="zh-CN">')
+    expect(desktop).toContain('连接你的手机')
+    expect(desktop).toContain('断开连接')
+    expect(phone).toContain('请在 DSH Desktop 中确认连接请求。')
   })
 })

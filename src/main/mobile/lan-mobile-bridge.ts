@@ -20,7 +20,7 @@ const RPC_ALLOWLIST = new Set([
 
 export interface LanMobileBridgeOptions {
   harnessUrl(): string | undefined
-  locale?: 'en' | 'zh'
+  locale?: 'en' | 'zh' | (() => 'en' | 'zh')
   brandLogoPaths?: { light: string; dark: string }
   appIconPath?: string
   port?: number
@@ -169,7 +169,8 @@ export class LanMobileBridge {
         renderDesktopPairingPage({
           qrSvg,
           pairingUrl: snapshot.pairingUrl,
-          expiresAt: snapshot.expiresAt
+          expiresAt: snapshot.expiresAt,
+          locale: this.locale()
         })
       )
     }
@@ -214,7 +215,7 @@ export class LanMobileBridge {
         remoteAddress,
         expiresAt: this.pairingExpiresAt!
       })
-      return this.html(response, renderPairingWaitPage(id))
+      return this.html(response, renderPairingWaitPage(id, this.locale()))
     }
 
     if (request.method === 'GET' && url.pathname === '/pair/status') {
@@ -241,8 +242,11 @@ export class LanMobileBridge {
     }
 
     if (!this.authorized(request)) return this.text(response, 401, 'Pair your phone again.')
+    if (request.method === 'GET' && url.pathname === '/api/status') {
+      return this.json(response, 200, { connected: true })
+    }
     if (request.method === 'GET' && url.pathname === '/') {
-      return this.html(response, renderMobilePage({ locale: this.options.locale ?? 'en' }))
+      return this.html(response, renderMobilePage({ locale: this.locale() }))
     }
     if (request.method === 'POST' && url.pathname === '/api/rpc') {
       this.verifySameOrigin(request)
@@ -254,6 +258,11 @@ export class LanMobileBridge {
       return this.json(response, result.ok ? 200 : 400, result)
     }
     this.text(response, 404, 'Not found.')
+  }
+
+  private locale(): 'en' | 'zh' {
+    const value = this.options.locale
+    return typeof value === 'function' ? value() : value ?? 'en'
   }
 
   private validPairingToken(candidate: string | null): boolean {
