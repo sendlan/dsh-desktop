@@ -65,19 +65,9 @@ DeepSeek Harness 本身提供完整的 Agent Runtime 与 Web UI。DSH Desktop �
 - 可把完整的自定义 Agent 预设导入/导出为便携的 [`.dshpreset` 压缩包](docs/preset-packages.md)，安装前会检查命名冲突并提示信任风险
 - 正式 DSH 应用图标，支持 macOS ICNS 与 Windows ICO
 
-## 模型提供方
+## 友情链接
 
-首次配置时可选择模型提供方并直接填写 API Key。DSH Desktop 复用 Harness 的真实 Settings/Credentials API：Key 只写入凭据存储，对应 Provider 路由会自动创建，并继承其内置模型目录，无需手工填写模型 ID。
-
-当前首启列表包括：
-
-| 类型 | Provider |
-| --- | --- |
-| 模型厂商 | DeepSeek、OpenAI、Anthropic、Google Gemini、xAI、Moonshot/Kimi、MiniMax、智谱 GLM、Mistral AI |
-| 模型聚合平台 | OpenRouter |
-| 推理服务平台 | Groq、Together AI |
-
-更多内置或自定义 Provider 可以在 Harness 的“设置 → 模型”中添加。
+[dsh-market](https://github.com/dsh-market/dsh-market) — DeepSeek Harness 插件市场：浏览、搜索社区 900+ 插件，截图预览、一键安装 / 更新 / 启停 / 换主题，多数插件免重启即时生效。
 
 ## 快速开始
 
