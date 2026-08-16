@@ -1,4 +1,4 @@
-import { ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import type { UpdateStatus } from '../shared/contracts'
 import {
   isUpdateDismissed,
@@ -17,6 +17,13 @@ let dismissedVersion: string | null = null
 let dismissedTransientPhase: UpdateStatus['phase'] | null = null
 let installing = false
 let receivedStatusEvent = false
+
+contextBridge.exposeInMainWorld(
+  'dshDesktop',
+  Object.freeze({
+    restartHarness: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('harness:restart')
+  })
+)
 
 function mount(): void {
   if (document.getElementById(ROOT_ID)) return

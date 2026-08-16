@@ -5,6 +5,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
   Menu,
   nativeTheme,
   shell,
@@ -27,6 +28,7 @@ let runtime: HarnessRuntime
 let launchDirectory: string
 let quitting = false
 let failureDialogVisible = false
+let harnessLaunchOperation: Promise<void> | undefined
 
 function isDevelopmentBuild(): boolean {
   if (!app.isPackaged) return true
@@ -191,9 +193,31 @@ async function showSplash(): Promise<void> {
   window.focus()
 }
 
-async function launchHarness(): Promise<void> {
-  await showSplash()
-  await runtime.start(launchDirectory)
+function launchHarness(): Promise<void> {
+  if (harnessLaunchOperation) return harnessLaunchOperation
+
+  harnessLaunchOperation = (async () => {
+    await showSplash()
+    await runtime.start(launchDirectory)
+  })().finally(() => {
+    harnessLaunchOperation = undefined
+  })
+  return harnessLaunchOperation
+}
+
+function registerHarnessHandlers(): void {
+  ipcMain.removeHandler('harness:restart')
+  ipcMain.handle('harness:restart', async (event) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      throw new Error('Harness restart is only available from the DSH Desktop window.')
+    }
+    if (runtime.snapshot().phase !== 'ready') {
+      throw new Error('Harness is not ready to restart.')
+    }
+
+    await launchHarness()
+    return { ok: runtime.snapshot().phase === 'ready' }
+  })
 }
 
 function showUnexpectedError(error: unknown): void {
@@ -346,6 +370,7 @@ async function bootstrap(): Promise<void> {
       }
     }
   })
+  registerHarnessHandlers()
   installMenu()
   await launchHarness()
   if (!developmentBuild) {
