@@ -5,6 +5,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
   Menu,
   nativeTheme,
   shell,
@@ -427,6 +428,8 @@ async function bootstrap(): Promise<void> {
     appIconPath: desktopIconPath(),
     port: developmentBuild ? 43128 : 43127
   })
+  ipcMain.handle('mobile:open-pairing', () => showMobilePairing())
+  ipcMain.handle('mobile:status', () => ({ connected: mobileBridge.snapshot().connected }))
   installMenu()
   await launchHarness()
   if (!developmentBuild) {

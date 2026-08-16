@@ -29,6 +29,7 @@ export interface LanMobileBridgeOptions {
 
 export interface LanMobileBridgeSnapshot {
   running: boolean
+  connected: boolean
   port?: number
   pairingUrl?: string
   desktopUrl?: string
@@ -95,11 +96,12 @@ export class LanMobileBridge {
   snapshot(): LanMobileBridgeSnapshot {
     const address = preferredLanAddress()
     if (!this.server || !this.port || !this.pairingToken || !this.pairingExpiresAt || !address) {
-      return { running: Boolean(this.server) }
+      return { running: Boolean(this.server), connected: this.sessions.size > 0 }
     }
     const pairingUrl = `http://${address}:${this.port}/pair?token=${this.pairingToken}`
     return {
       running: true,
+      connected: this.sessions.size > 0,
       port: this.port,
       pairingUrl,
       desktopUrl: `http://127.0.0.1:${this.port}/desktop`,
