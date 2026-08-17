@@ -89,6 +89,13 @@ function initializeUi(): void {
   mobileStatusTimer ??= window.setInterval(() => void refreshMobileStatus(), 1000)
 }
 
+contextBridge.exposeInMainWorld(
+  'dshDesktop',
+  Object.freeze({
+    restartHarness: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('harness:restart')
+  })
+)
+
 function mount(): void {
   if (document.getElementById(ROOT_ID)) return
 

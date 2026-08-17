@@ -58,6 +58,8 @@ describe('LAN mobile page', () => {
     expect(html).toContain("fetch('/api/status',{cache:'no-store'})")
     expect(html).toContain('setInterval(checkConnection,1500)')
     expect(html).toContain("status.classList.add('error-state')")
+    expect(html).toContain('archived=new Set(value.archivedSessionIds||[])')
+    expect(html).toContain('!archived.has(s.sessionId)')
   })
 
   it('uses DSH styling on both pairing surfaces', () => {
@@ -78,6 +80,10 @@ describe('LAN mobile page', () => {
         expect(() => new Function(script)).not.toThrow()
     }
     expect(desktop).toContain('/desktop/disconnect')
+    expect(desktop).toContain('prefers-color-scheme:dark')
+    expect(desktop).toContain('/brand-logo/dark')
+    expect(desktop).toContain('--bg:#141416')
+    expect(desktop).toContain('.qr{display:inline-flex;background:#fff')
     expect(desktop).toContain('Phone connected')
     expect(desktop).toContain('You can close this window now.')
     expect(desktop).toContain('onclick="window.close()">Done</button>')

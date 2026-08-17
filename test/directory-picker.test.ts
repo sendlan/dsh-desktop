@@ -30,4 +30,15 @@ describe('desktop Electron directory picker', () => {
     expect(dependencyPatch).toContain('window.dshDesktopDirectoryPicker')
     expect(dependencyPatch).toContain('DSH Desktop directory picker bridge is unavailable')
   })
+
+  it('keeps the Host API proxy active when the legacy picker service is absent', async () => {
+    const apiProxyPatch = await readFile(
+      'patches/@deepseek-ai+dsh-host-apiproxy+0.1.0-rc.6.patch',
+      'utf8'
+    )
+
+    expect(apiProxyPatch).toContain('const directoryPicker = ctx.get("directoryPicker")')
+    expect(apiProxyPatch).toContain('-\t\t"directoryPicker",')
+    expect(apiProxyPatch).toContain('details: { capability: "none" }')
+  })
 })

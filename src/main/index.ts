@@ -32,6 +32,7 @@ let mobileBridge: LanMobileBridge
 let launchDirectory: string
 let quitting = false
 let failureDialogVisible = false
+let harnessLaunchOperation: Promise<void> | undefined
 
 function isDevelopmentBuild(): boolean {
   if (!app.isPackaged) return true
@@ -158,6 +159,20 @@ function harnessLocale(): 'en' | 'zh' {
   }
 }
 
+function harnessThemePreference(): 'light' | 'dark' | 'system' {
+  try {
+    const settings = parse(
+      readFileSync(join(app.getPath('userData'), 'harness', 'settings.yaml'), 'utf8')
+    ) as { 'ui-theme'?: { preference?: unknown } }
+    const preference = settings['ui-theme']?.preference
+    return preference === 'light' || preference === 'dark' || preference === 'system'
+      ? preference
+      : 'system'
+  } catch {
+    return 'system'
+  }
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1380,
@@ -218,9 +233,31 @@ async function showSplash(): Promise<void> {
   window.focus()
 }
 
-async function launchHarness(): Promise<void> {
-  await showSplash()
-  await runtime.start(launchDirectory)
+function launchHarness(): Promise<void> {
+  if (harnessLaunchOperation) return harnessLaunchOperation
+
+  harnessLaunchOperation = (async () => {
+    await showSplash()
+    await runtime.start(launchDirectory)
+  })().finally(() => {
+    harnessLaunchOperation = undefined
+  })
+  return harnessLaunchOperation
+}
+
+function registerHarnessHandlers(): void {
+  ipcMain.removeHandler('harness:restart')
+  ipcMain.handle('harness:restart', async (event) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      throw new Error('Harness restart is only available from the DSH Desktop window.')
+    }
+    if (runtime.snapshot().phase !== 'ready') {
+      throw new Error('Harness is not ready to restart.')
+    }
+
+    await launchHarness()
+    return { ok: runtime.snapshot().phase === 'ready' }
+  })
 }
 
 function showUnexpectedError(error: unknown): void {
@@ -385,6 +422,7 @@ async function showMobilePairing(): Promise<void> {
   }
 
   if (mobileWindow && !mobileWindow.isDestroyed()) mobileWindow.destroy()
+  nativeTheme.themeSource = harnessThemePreference()
   mobileWindow = new BrowserWindow({
     width: 560,
     height: 700,
@@ -393,6 +431,7 @@ async function showMobilePairing(): Promise<void> {
     title: harnessLocale() === 'zh' ? '连接手机' : 'Connect Phone',
     icon: desktopIconPath(),
     parent: mainWindow,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#141416' : '#ffffff',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -430,6 +469,7 @@ async function bootstrap(): Promise<void> {
       }
     }
   })
+  registerHarnessHandlers()
   mobileBridge = new LanMobileBridge({
     harnessUrl: () => runtime.snapshot().url,
     locale: harnessLocale,
