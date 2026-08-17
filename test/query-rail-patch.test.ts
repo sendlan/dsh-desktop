@@ -26,6 +26,8 @@ describe('conversation Query navigation rail', () => {
 
     expect(patch).toContain('overflow-y:auto')
     expect(patch).toContain('overscroll-behavior-y:contain')
+    expect(patch).toContain('scrollbar-width:none')
+    expect(patch).toContain('dshQueryRail_scroller::-webkit-scrollbar{width:0;height:0;display:none}')
     expect(patch).toContain('onWheel: (event) => event.stopPropagation()')
     expect(patch).toContain('scroller.scrollTop = Math.max(0, top - 8)')
     expect(patch).toContain('left: Math.round(viewport.left + 12)')
