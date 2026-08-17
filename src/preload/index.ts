@@ -22,6 +22,10 @@ let phoneConnected = false
 let mobileStatusTimer: number | undefined
 const mobileButtonObserver = new MutationObserver(mountMobileButton)
 
+contextBridge.exposeInMainWorld('dshDesktopDirectoryPicker', {
+  pick: (): Promise<string | null> => ipcRenderer.invoke('directory-picker:open')
+})
+
 function mountMobileButton(): void {
   let style = document.getElementById(`${MOBILE_BUTTON_ID}-style`)
   if (!style) {
