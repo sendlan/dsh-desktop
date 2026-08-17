@@ -7,7 +7,9 @@ import {
   MARKET_PACKAGE,
   RECOMMENDED_MARKET_VERSION,
   STATUS_PATH,
+  UNINSTALL_PATH,
   buildInstallArguments,
+  buildUninstallArguments,
   isTrustedRequest,
   readMarketInstallation,
   resolvePnpmEntry
@@ -28,6 +30,15 @@ describe('desktop plugin market installer', () => {
     expect(RECOMMENDED_MARKET_VERSION).toBe('1.9.0')
     expect(STATUS_PATH).toBe('/dsh-desktop/market-installer/status')
     expect(INSTALL_PATH).toBe('/dsh-desktop/market-installer/install')
+    expect(UNINSTALL_PATH).toBe('/dsh-desktop/market-installer/uninstall')
+    expect(buildUninstallArguments('/app/dsh/bin.js')).toEqual([
+      '/app/dsh/bin.js',
+      'plugin',
+      '--profile',
+      'web',
+      'remove',
+      'dshmarket'
+    ])
   })
 
   it('ships a resolvable pnpm binary instead of relying on the user PATH', () => {
@@ -80,7 +91,7 @@ describe('desktop plugin market installer', () => {
     expect(isTrustedRequest(request({}, '192.168.1.5'))).toBe(false)
   })
 
-  it('registers a placeholder only until the real dshmarket client is composed', async () => {
+  it('registers a placeholder before install and a stable management tab afterward', async () => {
     const client = await readFile(
       join(process.cwd(), 'packages', 'dsh-desktop-market-installer', 'client.js'),
       'utf8'
@@ -94,6 +105,11 @@ describe('desktop plugin market installer', () => {
     expect(client).toContain("entry?.id === 'dshmarket'")
     expect(client).toContain("id: 'market'")
     expect(client).toContain('order: 40')
+    expect(client).toContain("id: 'desktop-market-management'")
+    expect(client).toContain("name: 'settings.plugins.tab'")
+    expect(client).toContain(
+      '只会移除 dsh-market。通过插件市场安装的其他插件将继续保留。'
+    )
     expect(desktopPatch).toContain('name: dsh-desktop-market-installer')
     expect(desktopPatch).toContain('allowRestart: false')
     expect(preload).toContain("restartHarness: (): Promise<{ ok: boolean }>")

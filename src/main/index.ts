@@ -159,6 +159,20 @@ function harnessLocale(): 'en' | 'zh' {
   }
 }
 
+function harnessThemePreference(): 'light' | 'dark' | 'system' {
+  try {
+    const settings = parse(
+      readFileSync(join(app.getPath('userData'), 'harness', 'settings.yaml'), 'utf8')
+    ) as { 'ui-theme'?: { preference?: unknown } }
+    const preference = settings['ui-theme']?.preference
+    return preference === 'light' || preference === 'dark' || preference === 'system'
+      ? preference
+      : 'system'
+  } catch {
+    return 'system'
+  }
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1380,
@@ -408,6 +422,7 @@ async function showMobilePairing(): Promise<void> {
   }
 
   if (mobileWindow && !mobileWindow.isDestroyed()) mobileWindow.destroy()
+  nativeTheme.themeSource = harnessThemePreference()
   mobileWindow = new BrowserWindow({
     width: 560,
     height: 700,
@@ -416,6 +431,7 @@ async function showMobilePairing(): Promise<void> {
     title: harnessLocale() === 'zh' ? '连接手机' : 'Connect Phone',
     icon: desktopIconPath(),
     parent: mainWindow,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#141416' : '#ffffff',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

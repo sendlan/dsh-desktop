@@ -10,8 +10,9 @@ export const MARKET_PACKAGE = 'dshmarket'
 export const MARKET_PROFILE = 'web'
 export const STATUS_PATH = '/dsh-desktop/market-installer/status'
 export const INSTALL_PATH = '/dsh-desktop/market-installer/install'
+export const UNINSTALL_PATH = '/dsh-desktop/market-installer/uninstall'
 
-const INSTALL_TIMEOUT_MS = 15 * 60 * 1000
+const OPERATION_TIMEOUT_MS = 15 * 60 * 1000
 const MAX_LOG_BYTES = 32 * 1024
 
 export const name = 'dsh-desktop-market-installer'
@@ -158,6 +159,10 @@ export function buildInstallArguments(dshEntry = resolveDshEntry()) {
   ]
 }
 
+export function buildUninstallArguments(dshEntry = resolveDshEntry()) {
+  return [dshEntry, 'plugin', '--profile', MARKET_PROFILE, 'remove', MARKET_PACKAGE]
+}
+
 async function atomicWrite(path, contents) {
   const temporary = `${path}.dsh-desktop-${process.pid}-${Date.now()}.tmp`
   await writeFile(temporary, contents, 'utf8')
@@ -185,20 +190,28 @@ export function apply(ctx) {
   const directory = profileDirectory(home)
   const manifestPath = join(directory, 'package.json')
   let activeChild
-  let installPromise
+  let operationPromise
   let phase = 'idle'
   let detail
   let restartRequired = false
 
   const status = async () => {
     const installation = await readMarketInstallation(home)
-    if (phase === 'installing') {
+    if (phase === 'installing' || phase === 'uninstalling') {
       return {
         phase,
         ...installation,
         recommendedVersion: RECOMMENDED_MARKET_VERSION,
         detail,
         restartRequired: false
+      }
+    }
+    if (phase === 'uninstalled') {
+      return {
+        phase,
+        ...installation,
+        recommendedVersion: RECOMMENDED_MARKET_VERSION,
+        restartRequired: true
       }
     }
     if (installation.installedVersion) {
@@ -227,15 +240,15 @@ export function apply(ctx) {
   }
 
   const runInstall = async () => {
+    phase = 'installing'
+    detail = undefined
+    restartRequired = false
     const current = await readMarketInstallation(home)
     if (current.installedVersion) {
       phase = 'idle'
       return
     }
 
-    phase = 'installing'
-    detail = undefined
-    restartRequired = false
     await ensurePnpmShim(home)
     await mkdir(directory, { recursive: true })
     let manifestSnapshot
@@ -267,7 +280,7 @@ export function apply(ctx) {
     const timer = setTimeout(() => {
       timedOut = true
       killProcessTree(child)
-    }, INSTALL_TIMEOUT_MS)
+    }, OPERATION_TIMEOUT_MS)
 
     try {
       const exit = await new Promise((resolveExit, rejectExit) => {
@@ -287,6 +300,82 @@ export function apply(ctx) {
         throw new Error('pnpm completed, but dshmarket was not found in the web profile.')
       }
       phase = 'idle'
+      detail = undefined
+      restartRequired = true
+    } catch (error) {
+      if (manifestSnapshot !== undefined) {
+        await atomicWrite(manifestPath, manifestSnapshot).catch(() => undefined)
+      }
+      phase = 'error'
+      detail = error instanceof Error ? error.message : String(error)
+      ctx.logger.warn(error instanceof Error ? error : new Error(detail))
+    } finally {
+      clearTimeout(timer)
+      if (activeChild === child) activeChild = undefined
+    }
+  }
+
+  const runUninstall = async () => {
+    phase = 'uninstalling'
+    detail = undefined
+    restartRequired = false
+    const current = await readMarketInstallation(home)
+    if (!current.dependency && !current.installedVersion) {
+      phase = 'uninstalled'
+      restartRequired = true
+      return
+    }
+
+    await ensurePnpmShim(home)
+    let manifestSnapshot
+    try {
+      manifestSnapshot = await readFile(manifestPath, 'utf8')
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+
+    const child = spawn(process.execPath, buildUninstallArguments(), {
+      cwd: directory,
+      env: { ...process.env, CI: 'true', NO_COLOR: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      detached: process.platform !== 'win32'
+    })
+    activeChild = child
+
+    let output = ''
+    const append = (chunk) => {
+      output = `${output}${chunk.toString('utf8')}`.slice(-MAX_LOG_BYTES)
+      const lines = output.trim().split(/\r?\n/u)
+      detail = lines.at(-1)?.slice(0, 800)
+    }
+    child.stdout.on('data', append)
+    child.stderr.on('data', append)
+
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      killProcessTree(child)
+    }, OPERATION_TIMEOUT_MS)
+
+    try {
+      const exit = await new Promise((resolveExit, rejectExit) => {
+        child.once('error', rejectExit)
+        child.once('exit', (code, signal) => resolveExit({ code, signal }))
+      })
+      if (timedOut) throw new Error('Uninstallation timed out after 15 minutes.')
+      if (exit.code !== 0) {
+        throw new Error(
+          detail ||
+            `The uninstaller exited with ${exit.signal ? `signal ${exit.signal}` : `code ${exit.code}`}.`
+        )
+      }
+
+      const removed = await readMarketInstallation(home)
+      if (removed.dependency || removed.installedVersion) {
+        throw new Error('pnpm completed, but dshmarket is still present in the web profile.')
+      }
+      phase = 'uninstalled'
       detail = undefined
       restartRequired = true
     } catch (error) {
@@ -326,7 +415,7 @@ export function apply(ctx) {
           sendJson(res, 403, { error: 'Request rejected.' })
           return
         }
-        if (installPromise) {
+        if (operationPromise) {
           sendJson(res, 409, await status())
           return
         }
@@ -337,24 +426,62 @@ export function apply(ctx) {
           return
         }
 
-        installPromise = runInstall()
+        operationPromise = runInstall()
           .catch((error) => {
             phase = 'error'
             detail = error instanceof Error ? error.message : String(error)
             ctx.logger.warn(error instanceof Error ? error : new Error(detail))
           })
           .finally(() => {
-            installPromise = undefined
+            operationPromise = undefined
+          })
+        sendJson(res, 202, await status())
+      }
+    })
+    const disposeUninstall = ctx.webServer.register({
+      kind: 'exact',
+      path: UNINSTALL_PATH,
+      handler: async (req, res) => {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { error: 'Method not allowed.' })
+          return
+        }
+        if (!isTrustedRequest(req, true)) {
+          sendJson(res, 403, { error: 'Request rejected.' })
+          return
+        }
+        if (operationPromise) {
+          sendJson(res, 409, await status())
+          return
+        }
+
+        const current = await readMarketInstallation(home)
+        if (!current.dependency && !current.installedVersion) {
+          phase = 'uninstalled'
+          restartRequired = true
+          sendJson(res, 200, await status())
+          return
+        }
+
+        operationPromise = runUninstall()
+          .catch((error) => {
+            phase = 'error'
+            detail = error instanceof Error ? error.message : String(error)
+            ctx.logger.warn(error instanceof Error ? error : new Error(detail))
+          })
+          .finally(() => {
+            operationPromise = undefined
           })
         sendJson(res, 202, await status())
       }
     })
 
     return async () => {
+      disposeUninstall()
       disposeInstall()
       disposeStatus()
       killProcessTree(activeChild)
-      await installPromise?.catch(() => undefined)
+      await operationPromise?.catch(() => undefined)
     }
   }, 'dsh-desktop-market-installer: fixed package routes')
 
