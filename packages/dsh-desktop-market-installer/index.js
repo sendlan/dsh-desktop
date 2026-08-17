@@ -121,9 +121,9 @@ export async function ensurePnpmShim(home = dshHome()) {
 
   if (process.platform === 'win32') {
     const pnpmPath = join(directory, 'pnpm.cmd')
-    await writeFile(pnpmPath, `@\"${executable}\" \"${pnpmEntry}\" %*\r\n`, 'utf8')
+    await writeFile(pnpmPath, `@echo off\r\n\"${executable}\" \"${pnpmEntry}\" %*\r\n`, 'utf8')
     const nodePath = join(directory, 'node.cmd')
-    await writeFile(nodePath, `@\"${executable}\" %*\r\n`, 'utf8')
+    await writeFile(nodePath, `@echo off\r\n\"${executable}\" %*\r\n`, 'utf8')
   } else {
     const pnpmPath = join(directory, 'pnpm')
     await writeFile(
