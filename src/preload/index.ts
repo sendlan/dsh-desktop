@@ -1,4 +1,4 @@
-import { ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import type { UpdateStatus } from '../shared/contracts'
 import {
   isUpdateDismissed,
@@ -21,6 +21,10 @@ let receivedStatusEvent = false
 let phoneConnected = false
 let mobileStatusTimer: number | undefined
 const mobileButtonObserver = new MutationObserver(mountMobileButton)
+
+contextBridge.exposeInMainWorld('dshDesktopDirectoryPicker', {
+  pick: (): Promise<string | null> => ipcRenderer.invoke('directory-picker:open')
+})
 
 function mountMobileButton(): void {
   let style = document.getElementById(`${MOBILE_BUTTON_ID}-style`)

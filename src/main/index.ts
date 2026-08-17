@@ -440,6 +440,22 @@ async function bootstrap(): Promise<void> {
     appIconPath: desktopIconPath(),
     port: developmentBuild ? 43128 : 43127
   })
+  ipcMain.handle('directory-picker:open', async (event) => {
+    if (
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      event.sender !== mainWindow.webContents ||
+      event.senderFrame !== mainWindow.webContents.mainFrame
+    ) {
+      throw new Error('Directory picker requests are only allowed from the main Harness window')
+    }
+
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: harnessLocale() === 'zh' ? '选择工作区目录' : 'Select Workspace Directory',
+      properties: ['openDirectory']
+    })
+    return result.canceled ? null : result.filePaths[0] ?? null
+  })
   ipcMain.handle('mobile:open-pairing', () => showMobilePairing())
   ipcMain.handle('mobile:status', () => ({ connected: mobileBridge.snapshot().connected }))
   installMenu()
