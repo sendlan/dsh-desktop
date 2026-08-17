@@ -76,6 +76,9 @@
     "vitest": "^4.1.10",
     "yaml": "^2.8.3"
   },
+  "overrides": {
+    "koffi": "3.1.5"
+  },
   "build": {
     "appId": "io.dsh.desktop",
     "productName": "DSH Desktop",
