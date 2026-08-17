@@ -75,7 +75,7 @@ describe('GitHub release contract', () => {
     expect(packageJson.build.portable).toBeUndefined()
   })
 
-  it('shows a packaged startup surface and pins the native directory picker', async () => {
+  it('shows a packaged startup surface and pins the Electron directory picker surface', async () => {
     const main = await readFile(path.join(projectRoot, 'src', 'main', 'index.ts'), 'utf8')
     const splash = await readFile(path.join(projectRoot, 'build', 'splash.html'), 'utf8')
     const patch = await readFile(
@@ -88,7 +88,7 @@ describe('GitHub release contract', () => {
     expect(splash).toContain('Starting DSH Desktop')
     expect(splash).toContain('prefers-reduced-motion')
     expect(patch).toMatch(/id: directory-picker\r?\n  disabled: true/)
-    expect(patch).toContain("name: '@deepseek-ai/dsh-host-directory-picker-native'")
+    expect(patch).not.toContain("name: '@deepseek-ai/dsh-host-directory-picker-native'")
     expect(patch).toContain("name: '@deepseek-ai/dsh-client-ui-directory-picker-native'")
   })
 
