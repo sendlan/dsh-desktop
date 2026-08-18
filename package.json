@@ -23,7 +23,7 @@
     "agent"
   ],
   "scripts": {
-    "postinstall": "patch-package && node scripts/install-brand-assets.mjs && install-electron --no",
+    "postinstall": "bash scripts/loong64-setup.sh && patch-package && node scripts/install-brand-assets.mjs && install-electron --no",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "icons:generate": "node scripts/generate-app-icons.mjs",
@@ -38,8 +38,7 @@
     "package:mac:arm64": "node scripts/verify-target.mjs darwin arm64 && npm run build && electron-builder --mac --arm64 --publish never",
     "package:mac:x64": "node scripts/verify-target.mjs darwin x64 && npm run build && electron-builder --mac --x64 --publish never",
     "package:win": "node scripts/verify-target.mjs win32 x64 && npm run build && electron-builder --win --x64 --publish never",
-    "package:linux:loong64": "node scripts/verify-target.mjs linux loong64 && npm run build && electron-builder --linux --loong64 --publish never",
-    "preinstall": "bash scripts/loong64-setup.sh"
+    "package:linux:loong64": "node scripts/verify-target.mjs linux loong64 && npm run build && electron-builder --linux --loong64 --publish never"
   },
   "dependencies": {
     "@deepseek-ai/cordis-plugin-group": "1.0.1",
