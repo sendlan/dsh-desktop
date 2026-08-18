@@ -1,0 +1,7 @@
+{
+  "name": "node",
+  "version": "26.7.0",
+  "bin": { "node": "bin/node" },
+  "os": ["linux"],
+  "cpu": ["loong64"]
+}
