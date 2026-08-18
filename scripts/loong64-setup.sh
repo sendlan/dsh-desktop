@@ -88,4 +88,18 @@ EOF
 fi
 info "landlock-run: built ($(file -b "$PKGS/landlock-loong64/bin/landlock-run" | cut -d, -f1-2))"
 
+# npm copies file: deps into node_modules before preinstall runs, so the
+# binaries land in platform-pkgs after the copy. Sync them into node_modules
+# (no-op when npm install has not been run yet).
+sync_binaries() {
+  local src="$1" dst="$2"
+  if [ -d "$dst" ]; then
+    mkdir -p "$dst"
+    cp -r "$src/." "$dst/"
+  fi
+}
+sync_binaries "$PKGS/node-pkg" "$ROOT/node_modules/node"
+sync_binaries "$PKGS/ripgrep-loong64" "$ROOT/node_modules/@vscode/ripgrep-linux-loong64"
+sync_binaries "$PKGS/landlock-loong64" "$ROOT/node_modules/@deepseek-ai/node-addon-landlock-run-linux-loong64"
+
 info "done. platform packages ready under platform-pkgs/"
