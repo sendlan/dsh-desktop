@@ -160,7 +160,14 @@ export class HarnessRuntime {
       this.writeLog(`[node] Harness process exited (${detail})`)
       if (this.child !== child) return
       this.child = undefined
-      this.setState('failed', `Harness stopped unexpectedly (${detail}).`)
+      const cause = extractFailureCause(this.logLines)
+      this.setState(
+        'failed',
+        cause
+          ? `Harness stopped unexpectedly (${detail}).
+${cause}`
+          : `Harness stopped unexpectedly (${detail}).`
+      )
     })
 
     const startedAt = Date.now()
@@ -239,6 +246,51 @@ export class HarnessRuntime {
     this.logStream?.end()
     this.logStream = undefined
   }
+}
+
+export function extractFailureCause(logLines: readonly string[]): string | undefined {
+  const stderrLines: string[] = []
+  let dshEntryError: string | undefined
+  let uncaughtError: string | undefined
+
+  for (const line of logLines) {
+    if (!line.startsWith('[stderr] ')) continue
+    const text = line.slice(8)
+    stderrLines.push(text)
+
+    if (dshEntryError === undefined) {
+      const m = text.match(/DSH entry failed:\s*(.+)/)
+      if (m && m[1]) dshEntryError = m[1].trim()
+    }
+
+    if (uncaughtError === undefined) {
+      const m1 = text.match(/uncaught exception:\s*(.+)/)
+      if (m1 && m1[1]) {
+        uncaughtError = m1[1].trim()
+      } else {
+        const m2 = text.match(/unhandled rejection:\s*(.+)/)
+        if (m2 && m2[1]) uncaughtError = m2[1].trim()
+      }
+    }
+  }
+
+  if (dshEntryError) return dshEntryError
+  if (uncaughtError) return uncaughtError
+
+  for (let i = stderrLines.length - 1; i >= 0; i--) {
+    const line = stderrLines[i]?.trim()
+    if (!line) continue
+    if (line.length < 200 && /\b(error|Error|ERROR|failed|Failed|FAILED)\b/.test(line)) {
+      return line
+    }
+  }
+
+  if (stderrLines.length > 0) {
+    const last = stderrLines[stderrLines.length - 1]?.trim()
+    if (last && last.length < 200) return last
+  }
+
+  return undefined
 }
 
 export function formatExitCode(code: number): string {
