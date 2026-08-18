@@ -159,6 +159,10 @@ function harnessLocale(): 'en' | 'zh' {
   }
 }
 
+function configureApplicationLocale(): void {
+  app.commandLine.appendSwitch('lang', harnessLocale() === 'zh' ? 'zh-CN' : 'en-US')
+}
+
 function harnessThemePreference(): 'light' | 'dark' | 'system' {
   try {
     const settings = parse(
@@ -512,6 +516,7 @@ async function bootstrap(): Promise<void> {
 }
 
 configureAppIdentity()
+configureApplicationLocale()
 const singleInstance = app.requestSingleInstanceLock()
 if (!singleInstance) {
   app.quit()
