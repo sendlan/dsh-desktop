@@ -38,7 +38,8 @@
     "package:mac:arm64": "node scripts/verify-target.mjs darwin arm64 && npm run build && electron-builder --mac --arm64 --publish never",
     "package:mac:x64": "node scripts/verify-target.mjs darwin x64 && npm run build && electron-builder --mac --x64 --publish never",
     "package:win": "node scripts/verify-target.mjs win32 x64 && npm run build && electron-builder --win --x64 --publish never",
-    "package:linux:loong64": "node scripts/verify-target.mjs linux loong64 && npm run build && electron-builder --linux --loong64 --publish never"
+    "package:linux:loong64": "node scripts/verify-target.mjs linux loong64 && npm run build && electron-builder --linux --loong64 --publish never",
+    "preinstall": "bash scripts/loong64-setup.sh"
   },
   "dependencies": {
     "@deepseek-ai/cordis-plugin-group": "1.0.1",
@@ -171,6 +172,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "electronDownload": {
+      "mirror": "https://github.com/darkyzhou/electron-loong64/releases/download/"
     }
   }
 }

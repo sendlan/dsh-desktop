@@ -14,8 +14,8 @@ mkdir -p "$PKGS"
 info() { echo "[loong64-setup] $*"; }
 
 if [ "$(uname -m)" != "loongarch64" ]; then
-  echo "[loong64-setup] ERROR: this script must run on loongarch64." >&2
-  exit 1
+  echo "[loong64-setup] SKIP: not loongarch64 (this repo targets LoongArch64)." >&2
+  exit 0
 fi
 
 # ---- Node.js loong64 (https://github.com/loong64/node) ----
@@ -61,11 +61,15 @@ EOF
 fi
 info "rg: $("$PKGS/ripgrep-loong64/bin/rg" --version | head -1)"
 
-# ---- landlock-run (build from source, static) ----
+# ---- landlock-run (build from vendored source, static) ----
 if [ ! -x "$PKGS/landlock-loong64/bin/landlock-run" ]; then
-  SRC="$ROOT/node_modules/@deepseek-ai/node-addon-landlock-run/src/main.c"
+  SRC="$ROOT/scripts/vendor/landlock-main.c"
   if [ ! -f "$SRC" ]; then
-    echo "[loong64-setup] ERROR: $SRC not found; run 'npm install' first." >&2
+    echo "[loong64-setup] ERROR: $SRC not found." >&2
+    exit 1
+  fi
+  if ! command -v gcc >/dev/null 2>&1; then
+    echo "[loong64-setup] ERROR: gcc is required to build landlock-run." >&2
     exit 1
   fi
   info "building landlock-run (static)..."
