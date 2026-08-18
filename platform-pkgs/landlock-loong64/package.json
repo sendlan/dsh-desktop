@@ -1,0 +1,8 @@
+{
+  "name": "@deepseek-ai/node-addon-landlock-run-linux-loong64",
+  "version": "0.1.1",
+  "license": "Apache-2.0",
+  "os": ["linux"],
+  "cpu": ["loong64"],
+  "files": ["bin/"]
+}
