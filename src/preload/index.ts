@@ -11,6 +11,7 @@ import {
   extractPluginName,
   pluginErrorMessage
 } from './plugin-error-view'
+import { mountWindowsTitlebar } from './windows-titlebar'
 
 const ROOT_ID = 'dsh-desktop-update-root'
 const PLUGIN_ERROR_ROOT_ID = 'dsh-desktop-plugin-error-root'
@@ -141,6 +142,9 @@ async function refreshMobileStatus(): Promise<void> {
 }
 
 function initializeUi(): void {
+  if (process.platform === 'win32') {
+    mountWindowsTitlebar({ document, ipcRenderer, locale })
+  }
   mount()
   mountPluginErrorCard()
   mountMobileButton()

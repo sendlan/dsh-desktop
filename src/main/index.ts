@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from "node:fs"
+import { rename, stat, mkdir } from "node:fs/promises"
 import { parse } from 'yaml'
 import {
   app,
@@ -10,6 +11,7 @@ import {
   Menu,
   nativeTheme,
   shell,
+  type IpcMainInvokeEvent,
   type MessageBoxOptions
 } from 'electron'
 import { extractFailureCause, extractOffendingPlugin, HarnessRuntime } from './runtime/harness-runtime'
@@ -26,6 +28,12 @@ import {
 } from './update/update-manager'
 import type { RuntimeSnapshot } from '../shared/contracts'
 import { resolveHarnessLocale } from './application-locale'
+import { installContextMenu } from './context-menu'
+import {
+  WINDOWS_TITLEBAR_HEIGHT,
+  isDesktopMenuCommand,
+  type DesktopMenuCommand
+} from '../shared/desktop-menu'
 
 let mainWindow: BrowserWindow | undefined
 let mobileWindow: BrowserWindow | undefined
@@ -50,6 +58,22 @@ function isDevelopmentBuild(): boolean {
 }
 
 const developmentBuild = isDevelopmentBuild()
+
+function windowsTitleBarOverlay(isDark: boolean): Electron.TitleBarOverlayOptions {
+  return {
+    color: '#00000000',
+    symbolColor: isDark ? '#f3f4f6' : '#202124',
+    height: WINDOWS_TITLEBAR_HEIGHT
+  }
+}
+
+function applyWindowChromeTheme(window: BrowserWindow, isDark: boolean): void {
+  if (window.isDestroyed()) return
+  window.setBackgroundColor(isDark ? '#141416' : '#ffffff')
+  if (process.platform === 'win32') {
+    window.setTitleBarOverlay(windowsTitleBarOverlay(isDark))
+  }
+}
 
 function configureAppIdentity(): void {
   if (developmentBuild) {
@@ -97,10 +121,17 @@ async function syncNativeTheme(window: BrowserWindow): Promise<void> {
           document.body.appendChild(dragRegion)
         }
       }
-      return document.body.hasAttribute('data-ds-dark-theme')
+      if (document.body.hasAttribute('data-ds-dark-theme')) return true
+      const color = getComputedStyle(document.body).backgroundColor
+      const channels = color.match(/[\\d.]+/g)?.slice(0, 3).map(Number)
+      if (!channels || channels.length < 3) {
+        return matchMedia('(prefers-color-scheme: dark)').matches
+      }
+      const [red, green, blue] = channels
+      return red * 0.2126 + green * 0.7152 + blue * 0.0722 < 128
     })()`
   )
-  window.setBackgroundColor(isDark ? '#141416' : '#ffffff')
+  applyWindowChromeTheme(window, isDark)
 }
 
 function dshEntryPath(): string {
@@ -183,6 +214,7 @@ function harnessThemePreference(): 'light' | 'dark' | 'system' {
 }
 
 function createWindow(): BrowserWindow {
+  const isWindows = process.platform === 'win32'
   const window = new BrowserWindow({
     width: 1380,
     height: 900,
@@ -192,6 +224,13 @@ function createWindow(): BrowserWindow {
     title: '',
     icon: desktopIconPath(),
     frame: process.platform !== 'darwin',
+    ...(isWindows
+      ? {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: windowsTitleBarOverlay(nativeTheme.shouldUseDarkColors),
+          autoHideMenuBar: true
+        }
+      : {}),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#141416' : '#f8f8f6',
     webPreferences: {
       contextIsolation: true,
@@ -204,12 +243,15 @@ function createWindow(): BrowserWindow {
   if (process.platform === 'darwin') {
     window.setWindowButtonVisibility(true)
     window.setWindowButtonPosition({ x: 12, y: 9 })
+  } else if (isWindows) {
+    window.setMenuBarVisibility(false)
   }
   window.on('page-title-updated', (event) => {
     event.preventDefault()
     window.setTitle('')
   })
   secureWindow(window)
+  installContextMenu(window, harnessLocale)
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = undefined
   })
@@ -267,6 +309,125 @@ function registerHarnessHandlers(): void {
     await launchHarness()
     return { ok: runtime.snapshot().phase === 'ready' }
   })
+
+  ipcMain.removeHandler('desktop-menu:execute')
+  ipcMain.handle('desktop-menu:execute', async (event, command: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    if (!isDesktopMenuCommand(command)) {
+      throw new Error('Unknown DSH Desktop menu command.')
+    }
+    await executeDesktopMenuCommand(command)
+    return { ok: true }
+  })
+
+  ipcMain.removeHandler('desktop-titlebar:set-theme')
+  ipcMain.handle('desktop-titlebar:set-theme', (event, isDark: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    if (typeof isDark !== 'boolean') {
+      throw new Error('The DSH Desktop titlebar theme must be a boolean.')
+    }
+    if (process.platform === 'win32' && mainWindow) {
+      applyWindowChromeTheme(mainWindow, isDark)
+    }
+    return { ok: true }
+  })
+}
+
+function assertTrustedMainWindowEvent(event: IpcMainInvokeEvent): void {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame
+  ) {
+    throw new Error('This action is only available from the main DSH Desktop window.')
+  }
+}
+
+async function executeDesktopMenuCommand(command: DesktopMenuCommand): Promise<void> {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  const contents = window.webContents
+
+  switch (command) {
+    case 'connect-phone':
+      await showMobilePairing()
+      break
+    case 'restart-harness':
+      await launchHarness()
+      break
+    case 'show-harness-log':
+      shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+      break
+    case 'check-for-updates':
+      await checkForUpdates(true)
+      break
+    case 'undo':
+      contents.undo()
+      break
+    case 'redo':
+      contents.redo()
+      break
+    case 'cut':
+      contents.cut()
+      break
+    case 'copy':
+      contents.copy()
+      break
+    case 'paste':
+      contents.paste()
+      break
+    case 'select-all':
+      contents.selectAll()
+      break
+    case 'reload':
+      contents.reload()
+      break
+    case 'toggle-devtools':
+      contents.toggleDevTools()
+      break
+    case 'zoom-reset':
+      contents.setZoomLevel(0)
+      break
+    case 'zoom-in':
+      contents.setZoomLevel(Math.min(3, contents.getZoomLevel() + 0.5))
+      break
+    case 'zoom-out':
+      contents.setZoomLevel(Math.max(-3, contents.getZoomLevel() - 0.5))
+      break
+    case 'toggle-fullscreen':
+      window.setFullScreen(!window.isFullScreen())
+      break
+    case 'about':
+      await dialog.showMessageBox(window, {
+        type: 'info',
+        title: 'DSH Desktop',
+        message: `DSH Desktop ${app.getVersion()}`,
+        detail: 'A desktop application for DeepSeek Harness.',
+        buttons: ['OK'],
+        noLink: true
+      })
+      break
+    case 'quit':
+      app.quit()
+      break
+  }
+}
+
+async function resetHarnessData(): Promise<boolean> {
+  const harnessHome = join(app.getPath('userData'), 'harness')
+  if (!existsSync(harnessHome)) return true
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backupPath = join(app.getPath('userData'), `harness-backup-${timestamp}`)
+
+  try {
+    await rename(harnessHome, backupPath)
+    await mkdir(harnessHome, { recursive: true })
+    return true
+  } catch {
+    return false
+  }
 }
 
 function showUnexpectedError(error: unknown): void {
@@ -286,23 +447,27 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
       const offendingPlugin = extractOffendingPlugin(runtime.snapshot().logs)
       const buttons = offendingPlugin
         ? (isChinese
-            ? [`卸载 "${offendingPlugin}" 并重试`, '重试', '查看日志', '退出']
-            : [`Uninstall "${offendingPlugin}" & Retry`, 'Retry', 'Show Log', 'Quit'])
+            ? [`卸载 "${offendingPlugin}" 并重试`, '重试', '查看日志', '重置数据', '退出']
+            : [`Uninstall "${offendingPlugin}" & Retry`, 'Retry', 'Show Log', 'Reset Data', 'Quit'])
         : (isChinese
-            ? ['重试', '查看日志', '退出']
-            : ['Retry', 'Show Log', 'Quit'])
+            ? ['重试', '查看日志', '重置数据', '退出']
+            : ['Retry', 'Show Log', 'Reset Data', 'Quit'])
 
       const detailText = isChinese
         ? (snapshot.launchDirectory
-            ? `工作区目录: ${snapshot.launchDirectory}\n\n${offendingPlugin ? `检测到插件 "${offendingPlugin}" 引发错误。可尝试一键卸载该插件并重试，或查看日志排查。` : '您可以重试或查看日志排查。'}`
-            : (offendingPlugin ? `检测到插件 "${offendingPlugin}" 引发错误。可尝试一键卸载该插件并重试，或查看日志排查。` : '您可以重试或查看日志排查。'))
+            ? `启动目录: ${snapshot.launchDirectory}\n\n${offendingPlugin ? `检测到插件 "${offendingPlugin}" 引发错误。可尝试一键卸载该插件并重试。` : ''}您也可以重试、查看日志，或重置 Harness 数据（将备份当前数据）。`
+            : `${offendingPlugin ? `检测到插件 "${offendingPlugin}" 引发错误。可尝试一键卸载该插件并重试。` : ''}您也可以重试、查看日志，或重置 Harness 数据（将备份当前数据）。`)
         : (snapshot.launchDirectory
-            ? `Launch directory: ${snapshot.launchDirectory}\n\n${offendingPlugin ? `Plugin "${offendingPlugin}" caused a startup error. You can uninstall it and retry, or inspect the Harness log.` : 'You can retry or inspect the Harness log.'}`
-            : (offendingPlugin ? `Plugin "${offendingPlugin}" caused a startup error. You can uninstall it and retry, or inspect the Harness log.` : 'You can retry or inspect the Harness log.'))
+            ? `Launch directory: ${snapshot.launchDirectory}\n\n${offendingPlugin ? `Plugin "${offendingPlugin}" caused a startup error. You can uninstall it and retry. ` : ''}You can also retry, inspect the log, or reset Harness data (your current data will be backed up).`
+            : `${offendingPlugin ? `Plugin "${offendingPlugin}" caused a startup error. You can uninstall it and retry. ` : ''}You can also retry, inspect the log, or reset Harness data (your current data will be backed up).`)
 
+      const uninstallId = offendingPlugin ? 0 : -1
+      const retryId = offendingPlugin ? 1 : 0
+      const showLogId = retryId + 1
+      const resetDataId = showLogId + 1
       const options: MessageBoxOptions = {
         type: 'error',
-        title: isChinese ? 'Harness 启动失败' : 'Harness could not start',
+        title: isChinese ? 'Harness 无法启动' : 'Harness could not start',
         message: snapshot.message,
         detail: detailText,
         buttons,
@@ -314,27 +479,36 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
         ? await dialog.showMessageBox(mainWindow, options)
         : await dialog.showMessageBox(options)
 
-      if (offendingPlugin) {
-        if (result.response === 0) {
-          await uninstallPluginFromProfile(dshHome, offendingPlugin)
+      if (result.response === uninstallId && offendingPlugin) {
+        await uninstallPluginFromProfile(dshHome, offendingPlugin)
+        await launchHarness()
+      } else if (result.response === retryId) {
+        await launchHarness()
+      } else if (result.response === showLogId) {
+        shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+        continue
+      } else if (result.response === resetDataId) {
+        const resetOk = await resetHarnessData()
+        if (resetOk) {
           await launchHarness()
-        } else if (result.response === 1) {
-          await launchHarness()
-        } else if (result.response === 2) {
-          shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
-          continue
         } else {
-          app.quit()
+          const fallbackOptions: MessageBoxOptions = {
+            type: 'warning',
+            title: isChinese ? '重置失败' : 'Reset Failed',
+            message: isChinese ? '无法重置 Harness 数据。' : 'Could not reset Harness data.',
+            detail: isChinese
+              ? '请手动删除 Harness 目录后重试。'
+              : 'Try deleting the Harness directory manually, then retry.',
+            buttons: ['OK'],
+            noLink: true
+          }
+          mainWindow
+            ? await dialog.showMessageBox(mainWindow, fallbackOptions)
+            : await dialog.showMessageBox(fallbackOptions)
+          continue
         }
       } else {
-        if (result.response === 0) {
-          await launchHarness()
-        } else if (result.response === 1) {
-          shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
-          continue
-        } else {
-          app.quit()
-        }
+        app.quit()
       }
 
       if (runtime.snapshot().phase !== 'failed') return
@@ -435,6 +609,9 @@ function installMenu(): void {
     { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'close' }] }
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+  if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setMenuBarVisibility(false)
+  }
 }
 
 async function showMobilePairing(): Promise<void> {
@@ -542,7 +719,12 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle('harness:show-log', () => {
     shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
   })
-  ipcMain.handle('harness:reset-plugins', async (_event, pluginName?: string) => {
+  ipcMain.removeHandler('harness:reset-plugins')
+  ipcMain.handle('harness:reset-plugins', async (event, pluginName?: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    if (pluginName !== undefined && typeof pluginName !== 'string') {
+      throw new Error('The failing plugin name must be a string.')
+    }
     const dshHome = join(app.getPath('userData'), 'harness')
     await resetPluginProfile(dshHome, pluginName)
     await launchHarness()
