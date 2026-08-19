@@ -6,7 +6,6 @@ export interface PluginRecoveryViewModel {
   locale: PluginRecoveryLocale
   brand: string
   badge: string
-  status: string
   heading: string
   summary: string
   reasonTitle: string
@@ -20,7 +19,7 @@ export interface PluginRecoveryViewModel {
   primaryBusyLabel: string
   logLabel: string
   advancedLabel: string
-  technicalLabel: string
+  errorLabel: string
   launchDirectoryLabel: string
   launchDirectory?: string
   rawError: string
@@ -54,12 +53,12 @@ export function describePluginFailure(
   if (duplicateRoute) {
     return locale === 'zh'
       ? {
-          title: '多个插件占用了同一个服务入口',
-          detail: `它们都尝试使用 ${duplicateRoute}，Harness 无法判断应该由哪个插件处理。`
+          title: '插件使用了重复的服务入口',
+          detail: `启动日志显示 ${duplicateRoute} 被重复注册，因此 Harness 无法继续启动。`
         }
       : {
-          title: 'Multiple plugins claimed the same service route',
-          detail: `They all tried to use ${duplicateRoute}, so Harness could not decide which plugin should handle it.`
+          title: 'A plugin registered a duplicate service route',
+          detail: `The startup log shows that ${duplicateRoute} was registered more than once, so Harness could not continue.`
         }
   }
 
@@ -101,12 +100,12 @@ export function describePluginFailure(
 
   return locale === 'zh'
     ? {
-        title: '插件启动时发生错误',
-        detail: 'DSH Desktop 已定位到可能导致 Harness 无法启动的插件。'
+        title: '插件启动失败',
+        detail: 'Harness 在加载插件时发生错误，但暂时无法自动判断更具体的原因。'
       }
     : {
         title: 'A plugin failed during startup',
-        detail: 'DSH Desktop identified the plugin or plugins that may be preventing Harness from starting.'
+        detail: 'Harness reported an error while loading a plugin, but the exact cause could not be determined automatically.'
       }
 }
 
@@ -129,14 +128,11 @@ export function buildPluginRecoveryViewModel(options: {
       locale,
       brand: 'DSH Desktop',
       badge: '启动修复',
-      status: '需要处理',
       heading: canUninstall
-        ? multiple
-          ? `发现 ${plugins.length} 个可能冲突的插件`
-          : '发现一个可能冲突的插件'
+        ? multiple ? `发现 ${plugins.length} 个导致启动失败的插件` : '发现导致启动失败的插件'
         : 'Harness 暂时无法启动',
       summary: canUninstall
-        ? '确认后只会移除下方列出的插件，然后自动重新启动并继续检查。'
+        ? ''
         : '目前还无法定位到具体插件。请打开 Harness 日志查看详细错误。',
       reasonTitle: description.title,
       reasonDetail: description.detail,
@@ -148,14 +144,12 @@ export function buildPluginRecoveryViewModel(options: {
       notice,
       safetyNote: '工作区、会话、模型配置和其他插件不会被删除。',
       primaryLabel: canUninstall
-        ? multiple
-          ? `卸载这 ${plugins.length} 个插件并继续检测`
-          : '卸载此插件并继续检测'
+        ? multiple ? `卸载这 ${plugins.length} 个插件并继续检测` : '卸载此插件并继续检测'
         : '打开 Harness 日志',
       primaryBusyLabel: canUninstall ? '正在处理并重新检测…' : '正在打开日志…',
       logLabel: '打开 Harness 日志',
-      advancedLabel: '高级排查',
-      technicalLabel: '技术详情',
+      advancedLabel: '查看技术详情',
+      errorLabel: '错误信息',
       launchDirectoryLabel: '启动目录',
       launchDirectory: snapshot.launchDirectory,
       rawError: snapshot.message,
@@ -168,14 +162,11 @@ export function buildPluginRecoveryViewModel(options: {
     locale,
     brand: 'DSH Desktop',
     badge: 'Startup recovery',
-    status: 'Action required',
     heading: canUninstall
-      ? multiple
-        ? `${plugins.length} potentially conflicting plugins found`
-        : 'A potentially conflicting plugin was found'
+      ? multiple ? `${plugins.length} plugins are preventing startup` : 'A plugin is preventing startup'
       : 'Harness could not start',
     summary: canUninstall
-      ? 'Only the plugins listed below will be removed. Harness will then restart and continue checking.'
+      ? ''
       : 'No specific plugin could be identified. Open the Harness log to inspect the detailed error.',
     reasonTitle: description.title,
     reasonDetail: description.detail,
@@ -187,14 +178,12 @@ export function buildPluginRecoveryViewModel(options: {
     notice,
     safetyNote: 'Your workspaces, sessions, model settings, and other plugins will not be removed.',
     primaryLabel: canUninstall
-      ? multiple
-        ? `Remove these ${plugins.length} plugins and continue`
-        : 'Remove this plugin and continue'
+      ? multiple ? `Remove these ${plugins.length} plugins and continue` : 'Remove this plugin and continue'
       : 'Open Harness log',
     primaryBusyLabel: canUninstall ? 'Removing and checking again…' : 'Opening log…',
     logLabel: 'Open Harness log',
-    advancedLabel: 'Advanced troubleshooting',
-    technicalLabel: 'Technical details',
+    advancedLabel: 'View technical details',
+    errorLabel: 'Error details',
     launchDirectoryLabel: 'Launch directory',
     launchDirectory: snapshot.launchDirectory,
     rawError: snapshot.message,

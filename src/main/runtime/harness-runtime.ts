@@ -68,6 +68,20 @@ export function buildNodeArguments(
   ]
 }
 
+export function updateReadyStability(
+  readySince: number | undefined,
+  healthy: boolean,
+  now: number,
+  stabilityWindowMs = 500
+): { readySince: number | undefined; ready: boolean } {
+  if (!healthy) return { readySince: undefined, ready: false }
+  const stableSince = readySince ?? now
+  return {
+    readySince: stableSince,
+    ready: now - stableSince >= stabilityWindowMs
+  }
+}
+
 export class HarnessRuntime {
   private child?: ChildProcessWithoutNullStreams
   private logStream?: WriteStream
@@ -377,14 +391,24 @@ async function waitUntilReady(
   timeoutMs: number
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
+  const stabilityWindowMs = 500
+  let readySince: number | undefined
   while (Date.now() < deadline && isAlive()) {
     try {
       const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(1_000) })
-      if (response.status >= 200 && response.status < 500) return true
+      const stability = updateReadyStability(
+        readySince,
+        response.status >= 200 && response.status < 500,
+        Date.now(),
+        stabilityWindowMs
+      )
+      readySince = stability.readySince
+      if (stability.ready) return true
     } catch {
       // The server is expected to reject connections while it is booting.
+      readySince = updateReadyStability(readySince, false, Date.now()).readySince
     }
-    await new Promise((resolve) => setTimeout(resolve, 250))
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
   return false
 }

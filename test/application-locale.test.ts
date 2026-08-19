@@ -13,4 +13,9 @@ describe('application locale', () => {
     expect(resolveHarnessLocale(undefined, ['en-US', 'zh-Hans-CN'])).toBe('en')
     expect(resolveHarnessLocale(undefined, [])).toBe('en')
   })
+
+  it('falls back to the system language when the saved preference is invalid', () => {
+    expect(resolveHarnessLocale('auto', ['zh-CN'])).toBe('zh')
+    expect(resolveHarnessLocale({ value: 'zh' }, ['en-US'])).toBe('en')
+  })
 })

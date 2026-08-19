@@ -20,8 +20,27 @@ describe('plugin recovery view model', () => {
       ['[stderr] webserver: duplicate prefix route "/sidebar/api"'],
       'zh'
     )
-    expect(description.title).toBe('多个插件占用了同一个服务入口')
+    expect(description.title).toBe('插件使用了重复的服务入口')
     expect(description.detail).toContain('/sidebar/api')
+    expect(description.detail).toContain('启动日志显示')
+  })
+
+  it('uses an honest generic explanation when the exact cause is unknown', () => {
+    const description = describePluginFailure(
+      ['[stderr] plugin initialization returned an unexpected error'],
+      'zh'
+    )
+    expect(description.title).toBe('插件启动失败')
+    expect(description.detail).toContain('无法自动判断更具体的原因')
+    expect(description.detail).not.toContain('/sidebar/api')
+  })
+
+  it.each([
+    ['cannot resolve profile bundle example', '插件没有完整安装'],
+    ['package declares no dsh.bundle', '安装的包不是兼容的 DSH 插件'],
+    ['failed to import loader entry example', '插件代码加载失败']
+  ])('describes known startup failures: %s', (log, expectedTitle) => {
+    expect(describePluginFailure([`[stderr] ${log}`], 'zh').title).toBe(expectedTitle)
   })
 
   it('presents multiple plugins as one recovery step', () => {
@@ -31,10 +50,13 @@ describe('plugin recovery view model', () => {
       removedPlugins: [],
       locale: 'zh'
     })
-    expect(model.heading).toBe('发现 2 个可能冲突的插件')
+    expect(model.heading).toBe('发现 2 个导致启动失败的插件')
+    expect(model.summary).toBe('')
     expect(model.plugins).toEqual(['plugin-a', 'plugin-b'])
     expect(model.primaryLabel).toBe('卸载这 2 个插件并继续检测')
     expect(model.canUninstall).toBe(true)
+    expect(model).not.toHaveProperty('status')
+    expect(model.advancedLabel).toBe('查看技术详情')
   })
 
   it('shows progress when recovery discovers another conflict after a restart', () => {

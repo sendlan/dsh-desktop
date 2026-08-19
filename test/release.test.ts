@@ -65,6 +65,10 @@ describe('GitHub release contract', () => {
       to: 'splash.html'
     })
     expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/dsh-loader.gif',
+      to: 'dsh-loader.gif'
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
       from: 'build/dsh-desktop.patch.yml',
       to: 'dsh-desktop.patch.yml'
     })
@@ -100,10 +104,20 @@ describe('GitHub release contract', () => {
     expect(main).toContain("desktopResourcePath('splash.html')")
     expect(main).toContain('await showSplash()')
     expect(splash).toContain('Starting DSH Desktop')
-    expect(splash).toContain('prefers-reduced-motion')
+    expect(splash).toContain('src="dsh-loader.gif"')
+    expect(splash).not.toContain('class="track"')
     expect(patch).toMatch(/id: directory-picker\r?\n  disabled: true/)
     expect(patch).not.toContain("name: '@deepseek-ai/dsh-host-directory-picker-native'")
     expect(patch).toContain("name: '@deepseek-ai/dsh-client-ui-directory-picker-native'")
+  })
+
+  it('routes manual restarts through the active plugin recovery flow', async () => {
+    const main = await readFile(path.join(projectRoot, 'src', 'main', 'index.ts'), 'utf8')
+
+    expect(main).toContain("if (failureRecoveryVisible) resolvePluginRecoveryAction('restart')")
+    expect(main).toMatch(/case 'restart-harness':\s+await restartHarness\(\)/)
+    expect(main).toContain('click: () => void restartHarness().catch(showUnexpectedError)')
+    expect(main).toContain("} else if (action === 'restart') {")
   })
 
   it('publishes update metadata for installed desktop builds', async () => {

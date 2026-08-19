@@ -35,7 +35,7 @@ import {
 } from '../shared/desktop-menu'
 import { buildPluginRecoveryViewModel } from './plugin-recovery-view'
 
-type PluginRecoveryAction = 'uninstall' | 'show-log' | 'quit'
+type PluginRecoveryAction = 'uninstall' | 'show-log' | 'quit' | 'restart'
 
 const PLUGIN_RECOVERY_ACTIONS = new Set<PluginRecoveryAction>([
   'uninstall',
@@ -52,6 +52,7 @@ let quitting = false
 let failureRecoveryVisible = false
 let harnessLaunchOperation: Promise<void> | undefined
 let pluginRecoveryActionResolver: ((action: PluginRecoveryAction) => void) | undefined
+let mainWindowNavigationVersion = 0
 
 function isDevelopmentBuild(): boolean {
   if (!app.isPackaged) return true
@@ -303,14 +304,18 @@ function createWindow(): BrowserWindow {
 async function openHarness(url: string): Promise<void> {
   const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
   if (shouldLoadHarnessUrl(window.webContents.getURL(), url)) {
+    const navigationVersion = ++mainWindowNavigationVersion
+    window.webContents.stop()
     try {
       await window.loadURL(url)
     } catch (error) {
+      if (navigationVersion !== mainWindowNavigationVersion) return
       if (isAbortedNavigationError(error)) return
       const snapshot = runtime.snapshot()
       if (snapshot.phase !== 'ready' || snapshot.url !== url) return
       throw error
     }
+    if (navigationVersion !== mainWindowNavigationVersion) return
   }
   if (runtime.snapshot().url !== url || window.isDestroyed()) return
   await syncNativeTheme(window)
@@ -321,8 +326,10 @@ async function openHarness(url: string): Promise<void> {
 
 async function showSplash(): Promise<void> {
   const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
+  const navigationVersion = ++mainWindowNavigationVersion
+  window.webContents.stop()
   await window.loadFile(desktopResourcePath('splash.html'))
-  if (window.isDestroyed()) return
+  if (window.isDestroyed() || navigationVersion !== mainWindowNavigationVersion) return
   window.show()
   window.focus()
 }
@@ -339,6 +346,11 @@ function launchHarness(): Promise<void> {
   return harnessLaunchOperation
 }
 
+function restartHarness(): Promise<void> {
+  if (failureRecoveryVisible) resolvePluginRecoveryAction('restart')
+  return launchHarness()
+}
+
 function registerHarnessHandlers(): void {
   ipcMain.removeHandler('harness:restart')
   ipcMain.handle('harness:restart', async (event) => {
@@ -349,7 +361,7 @@ function registerHarnessHandlers(): void {
       throw new Error('Harness is not ready to restart.')
     }
 
-    await launchHarness()
+    await restartHarness()
     return { ok: runtime.snapshot().phase === 'ready' }
   })
 
@@ -397,7 +409,7 @@ async function executeDesktopMenuCommand(command: DesktopMenuCommand): Promise<v
       await showMobilePairing()
       break
     case 'restart-harness':
-      await launchHarness()
+      await restartHarness()
       break
     case 'show-harness-log':
       shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
@@ -471,6 +483,8 @@ async function waitForPluginRecoveryAction(options: {
   const actionPromise = new Promise<PluginRecoveryAction>((resolve) => {
     pluginRecoveryActionResolver = resolve
   })
+  const navigationVersion = ++mainWindowNavigationVersion
+  window.webContents.stop()
 
   try {
     await window.loadFile(desktopResourcePath('plugin-recovery.html'), {
@@ -485,7 +499,7 @@ async function waitForPluginRecoveryAction(options: {
     throw error
   }
 
-  if (window.isDestroyed()) return 'quit'
+  if (window.isDestroyed() || navigationVersion !== mainWindowNavigationVersion) return 'quit'
   if (window.isMinimized()) window.restore()
   window.show()
   window.focus()
@@ -540,6 +554,8 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
             ? `以下插件未能移除：${failedPlugins.join('、')}`
             : `These plugins could not be removed: ${failedPlugins.join(', ')}`
         }
+        await launchHarness()
+      } else if (action === 'restart') {
         await launchHarness()
       } else if (action === 'show-log') {
         shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
@@ -598,7 +614,7 @@ function installMenu(): void {
         {
           label: isChinese ? '重启 Harness' : 'Restart Harness',
           accelerator: 'CmdOrCtrl+Shift+R',
-          click: () => void launchHarness().catch(showUnexpectedError)
+          click: () => void restartHarness().catch(showUnexpectedError)
         },
         {
           label: isChinese ? '查看 Harness 日志' : 'Show Harness Log',

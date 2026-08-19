@@ -6,7 +6,8 @@ import {
   extractFailureCause,
   extractOffendingPlugin,
   extractOffendingPlugins,
-  formatExitCode
+  formatExitCode,
+  updateReadyStability
 } from '../src/main/runtime/harness-runtime'
 import { canGrantWindowPermission, isTrustedAppUrl } from '../src/main/security-policy'
 import {
@@ -15,6 +16,18 @@ import {
 } from '../src/main/window-navigation'
 
 describe('Harness launch contract', () => {
+  it('does not treat a briefly reachable port as a completed Harness startup', () => {
+    const firstProbe = updateReadyStability(undefined, true, 1_000)
+    expect(firstProbe).toEqual({ readySince: 1_000, ready: false })
+
+    const interruptedProbe = updateReadyStability(firstProbe.readySince, false, 1_400)
+    expect(interruptedProbe).toEqual({ readySince: undefined, ready: false })
+
+    const restartedProbe = updateReadyStability(interruptedProbe.readySince, true, 2_000)
+    expect(updateReadyStability(restartedProbe.readySince, true, 2_499).ready).toBe(false)
+    expect(updateReadyStability(restartedProbe.readySince, true, 2_500).ready).toBe(true)
+  })
+
   it('binds the web server to a random loopback port', () => {
     expect(buildHarnessArguments(43127)).toEqual([
       'web',
