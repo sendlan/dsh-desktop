@@ -4,6 +4,7 @@ import {
   buildHarnessSpawnOptions,
   buildNodeArguments,
   extractFailureCause,
+  extractOffendingPlugin,
   formatExitCode
 } from '../src/main/runtime/harness-runtime'
 import { canGrantWindowPermission, isTrustedAppUrl } from '../src/main/security-policy'
@@ -159,6 +160,51 @@ describe('harness failure cause extraction', () => {
       '[stderr] short error message',
     ]
     expect(extractFailureCause(logs)).toBe('short error message')
+  })
+})
+
+describe('offending plugin extraction', () => {
+  it('extracts plugin name from loader entry failure in stderr', () => {
+    const logs = [
+      '[stderr] [harness-node] DSH entry failed: Error: dsh: plugin tree failed to load: failed to apply loader entry web-ui-better-sidebar (dsh-better-sidebar): webserver: duplicate prefix route "/sidebar/api"',
+      '[stderr] Error: webserver: duplicate prefix route "/sidebar/api"'
+    ]
+    expect(extractOffendingPlugin(logs)).toBe('dsh-better-sidebar')
+  })
+
+  it('extracts scoped plugin name from loader entry failure', () => {
+    const logs = [
+      '[stderr] [harness-node] DSH entry failed: Error: dsh: plugin tree failed to load: failed to apply loader entry abc (@linxin666/dsh-web-ui-all): error message'
+    ]
+    expect(extractOffendingPlugin(logs)).toBe('@linxin666/dsh-web-ui-all')
+  })
+
+  it('extracts plugin name from cannot resolve profile bundle error', () => {
+    const logs = [
+      '[stderr] [harness-node] DSH entry failed: Error: dsh: cannot resolve profile bundle "custom-broken-bundle" from the dsh installation'
+    ]
+    expect(extractOffendingPlugin(logs)).toBe('custom-broken-bundle')
+  })
+
+  it('extracts plugin name from declares no dsh.bundle error', () => {
+    const logs = [
+      '[stderr] [harness-node] DSH entry failed: Error: dsh: profile bundle "plain-npm-package" declares no dsh.bundle in its package.json'
+    ]
+    expect(extractOffendingPlugin(logs)).toBe('plain-npm-package')
+  })
+
+  it('ignores core deepseek packages as offending plugins', () => {
+    const logs = [
+      '[stderr] [harness-node] DSH entry failed: Error: dsh: plugin tree failed to load: failed to apply loader entry base (@deepseek-ai/dsh-base): some error'
+    ]
+    expect(extractOffendingPlugin(logs)).toBeUndefined()
+  })
+
+  it('returns undefined when no plugin error is matched', () => {
+    const logs = [
+      '[stderr] [harness-node] uncaught exception: ReferenceError: x is not defined'
+    ]
+    expect(extractOffendingPlugin(logs)).toBeUndefined()
   })
 })
 
