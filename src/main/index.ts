@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from "node:fs"
+import { rename, stat, mkdir } from "node:fs/promises"
 import { parse } from 'yaml'
 import {
   app,
@@ -268,6 +269,22 @@ function registerHarnessHandlers(): void {
   })
 }
 
+async function resetHarnessData(): Promise<boolean> {
+  const harnessHome = join(app.getPath('userData'), 'harness')
+  if (!existsSync(harnessHome)) return true
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backupPath = join(app.getPath('userData'), `harness-backup-${timestamp}`)
+
+  try {
+    await rename(harnessHome, backupPath)
+    await mkdir(harnessHome, { recursive: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function showUnexpectedError(error: unknown): void {
   const message = error instanceof Error ? error.stack ?? error.message : String(error)
   dialog.showErrorBox('DSH Desktop encountered an error', message)
@@ -279,16 +296,23 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
 
   try {
     while (!quitting && runtime.snapshot().phase === 'failed') {
+      const isChinese = harnessLocale() === 'zh'
       const options: MessageBoxOptions = {
         type: 'error',
-        title: 'Harness could not start',
+        title: isChinese ? 'Harness 无法启动' : 'Harness could not start',
         message: snapshot.message,
         detail: snapshot.launchDirectory
-          ? `Launch directory: ${snapshot.launchDirectory}\n\nYou can retry or inspect the Harness log.`
-          : 'You can retry or inspect the Harness log.',
-        buttons: ['Retry', 'Show Log', 'Quit'],
+          ? isChinese
+            ? `启动目录: ${snapshot.launchDirectory}\n\n您可以重试、查看日志，或重置 Harness 数据（将备份当前数据）。`
+            : `Launch directory: ${snapshot.launchDirectory}\n\nYou can retry, inspect the log, or reset Harness data (your current data will be backed up).`
+          : isChinese
+            ? '您可以重试、查看日志，或重置 Harness 数据（将备份当前数据）。'
+            : 'You can retry, inspect the log, or reset Harness data (your current data will be backed up).',
+        buttons: isChinese
+          ? ['重试', '查看日志', '重置数据', '退出']
+          : ['Retry', 'Show Log', 'Reset Data', 'Quit'],
         defaultId: 0,
-        cancelId: 2,
+        cancelId: 3,
         noLink: true
       }
       const result = mainWindow
@@ -300,6 +324,26 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
       } else if (result.response === 1) {
         shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
         continue
+      } else if (result.response === 2) {
+        const resetOk = await resetHarnessData()
+        if (resetOk) {
+          await launchHarness()
+        } else {
+          const fallbackOptions: MessageBoxOptions = {
+            type: 'warning',
+            title: isChinese ? '重置失败' : 'Reset Failed',
+            message: isChinese ? '无法重置 Harness 数据。' : 'Could not reset Harness data.',
+            detail: isChinese
+              ? '请手动删除 Harness 目录后重试。'
+              : 'Try deleting the Harness directory manually, then retry.',
+            buttons: ['OK'],
+            noLink: true
+          }
+          mainWindow
+            ? await dialog.showMessageBox(mainWindow, fallbackOptions)
+            : await dialog.showMessageBox(fallbackOptions)
+          continue
+        }
       } else {
         app.quit()
       }
