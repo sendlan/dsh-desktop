@@ -11,6 +11,7 @@ import {
   Menu,
   nativeTheme,
   shell,
+  type IpcMainInvokeEvent,
   type MessageBoxOptions
 } from 'electron'
 import { HarnessRuntime } from './runtime/harness-runtime'
@@ -27,6 +28,11 @@ import {
 import type { RuntimeSnapshot } from '../shared/contracts'
 import { resolveHarnessLocale } from './application-locale'
 import { installContextMenu } from './context-menu'
+import {
+  WINDOWS_TITLEBAR_HEIGHT,
+  isDesktopMenuCommand,
+  type DesktopMenuCommand
+} from '../shared/desktop-menu'
 
 let mainWindow: BrowserWindow | undefined
 let mobileWindow: BrowserWindow | undefined
@@ -51,6 +57,22 @@ function isDevelopmentBuild(): boolean {
 }
 
 const developmentBuild = isDevelopmentBuild()
+
+function windowsTitleBarOverlay(isDark: boolean): Electron.TitleBarOverlayOptions {
+  return {
+    color: '#00000000',
+    symbolColor: isDark ? '#f3f4f6' : '#202124',
+    height: WINDOWS_TITLEBAR_HEIGHT
+  }
+}
+
+function applyWindowChromeTheme(window: BrowserWindow, isDark: boolean): void {
+  if (window.isDestroyed()) return
+  window.setBackgroundColor(isDark ? '#141416' : '#ffffff')
+  if (process.platform === 'win32') {
+    window.setTitleBarOverlay(windowsTitleBarOverlay(isDark))
+  }
+}
 
 function configureAppIdentity(): void {
   if (developmentBuild) {
@@ -98,10 +120,17 @@ async function syncNativeTheme(window: BrowserWindow): Promise<void> {
           document.body.appendChild(dragRegion)
         }
       }
-      return document.body.hasAttribute('data-ds-dark-theme')
+      if (document.body.hasAttribute('data-ds-dark-theme')) return true
+      const color = getComputedStyle(document.body).backgroundColor
+      const channels = color.match(/[\\d.]+/g)?.slice(0, 3).map(Number)
+      if (!channels || channels.length < 3) {
+        return matchMedia('(prefers-color-scheme: dark)').matches
+      }
+      const [red, green, blue] = channels
+      return red * 0.2126 + green * 0.7152 + blue * 0.0722 < 128
     })()`
   )
-  window.setBackgroundColor(isDark ? '#141416' : '#ffffff')
+  applyWindowChromeTheme(window, isDark)
 }
 
 function dshEntryPath(): string {
@@ -184,6 +213,7 @@ function harnessThemePreference(): 'light' | 'dark' | 'system' {
 }
 
 function createWindow(): BrowserWindow {
+  const isWindows = process.platform === 'win32'
   const window = new BrowserWindow({
     width: 1380,
     height: 900,
@@ -193,6 +223,13 @@ function createWindow(): BrowserWindow {
     title: '',
     icon: desktopIconPath(),
     frame: process.platform !== 'darwin',
+    ...(isWindows
+      ? {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: windowsTitleBarOverlay(nativeTheme.shouldUseDarkColors),
+          autoHideMenuBar: true
+        }
+      : {}),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#141416' : '#f8f8f6',
     webPreferences: {
       contextIsolation: true,
@@ -205,6 +242,8 @@ function createWindow(): BrowserWindow {
   if (process.platform === 'darwin') {
     window.setWindowButtonVisibility(true)
     window.setWindowButtonPosition({ x: 12, y: 9 })
+  } else if (isWindows) {
+    window.setMenuBarVisibility(false)
   }
   window.on('page-title-updated', (event) => {
     event.preventDefault()
@@ -269,6 +308,109 @@ function registerHarnessHandlers(): void {
     await launchHarness()
     return { ok: runtime.snapshot().phase === 'ready' }
   })
+
+  ipcMain.removeHandler('desktop-menu:execute')
+  ipcMain.handle('desktop-menu:execute', async (event, command: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    if (!isDesktopMenuCommand(command)) {
+      throw new Error('Unknown DSH Desktop menu command.')
+    }
+    await executeDesktopMenuCommand(command)
+    return { ok: true }
+  })
+
+  ipcMain.removeHandler('desktop-titlebar:set-theme')
+  ipcMain.handle('desktop-titlebar:set-theme', (event, isDark: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    if (typeof isDark !== 'boolean') {
+      throw new Error('The DSH Desktop titlebar theme must be a boolean.')
+    }
+    if (process.platform === 'win32' && mainWindow) {
+      applyWindowChromeTheme(mainWindow, isDark)
+    }
+    return { ok: true }
+  })
+}
+
+function assertTrustedMainWindowEvent(event: IpcMainInvokeEvent): void {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame
+  ) {
+    throw new Error('This action is only available from the main DSH Desktop window.')
+  }
+}
+
+async function executeDesktopMenuCommand(command: DesktopMenuCommand): Promise<void> {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  const contents = window.webContents
+
+  switch (command) {
+    case 'connect-phone':
+      await showMobilePairing()
+      break
+    case 'restart-harness':
+      await launchHarness()
+      break
+    case 'show-harness-log':
+      shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+      break
+    case 'check-for-updates':
+      await checkForUpdates(true)
+      break
+    case 'undo':
+      contents.undo()
+      break
+    case 'redo':
+      contents.redo()
+      break
+    case 'cut':
+      contents.cut()
+      break
+    case 'copy':
+      contents.copy()
+      break
+    case 'paste':
+      contents.paste()
+      break
+    case 'select-all':
+      contents.selectAll()
+      break
+    case 'reload':
+      contents.reload()
+      break
+    case 'toggle-devtools':
+      contents.toggleDevTools()
+      break
+    case 'zoom-reset':
+      contents.setZoomLevel(0)
+      break
+    case 'zoom-in':
+      contents.setZoomLevel(Math.min(3, contents.getZoomLevel() + 0.5))
+      break
+    case 'zoom-out':
+      contents.setZoomLevel(Math.max(-3, contents.getZoomLevel() - 0.5))
+      break
+    case 'toggle-fullscreen':
+      window.setFullScreen(!window.isFullScreen())
+      break
+    case 'about':
+      await dialog.showMessageBox(window, {
+        type: 'info',
+        title: 'DSH Desktop',
+        message: `DSH Desktop ${app.getVersion()}`,
+        detail: 'A desktop application for DeepSeek Harness.',
+        buttons: ['OK'],
+        noLink: true
+      })
+      break
+    case 'quit':
+      app.quit()
+      break
+  }
 }
 
 async function resetHarnessData(): Promise<boolean> {
@@ -448,6 +590,9 @@ function installMenu(): void {
     { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'close' }] }
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+  if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setMenuBarVisibility(false)
+  }
 }
 
 async function showMobilePairing(): Promise<void> {
