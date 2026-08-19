@@ -24,6 +24,7 @@ import {
   stopUpdateManager
 } from './update/update-manager'
 import type { RuntimeSnapshot } from '../shared/contracts'
+import { resolveHarnessLocale } from './application-locale'
 
 let mainWindow: BrowserWindow | undefined
 let mobileWindow: BrowserWindow | undefined
@@ -153,10 +154,17 @@ function harnessLocale(): 'en' | 'zh' {
     const settings = parse(
       readFileSync(join(app.getPath('userData'), 'harness', 'settings.yaml'), 'utf8')
     ) as { locale?: { preference?: unknown } }
-    return settings.locale?.preference === 'zh' ? 'zh' : 'en'
+    return resolveHarnessLocale(
+      settings.locale?.preference,
+      app.getPreferredSystemLanguages()
+    )
   } catch {
-    return app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en'
+    return resolveHarnessLocale(undefined, app.getPreferredSystemLanguages())
   }
+}
+
+function configureApplicationLocale(): void {
+  app.commandLine.appendSwitch('lang', harnessLocale() === 'zh' ? 'zh-CN' : 'en-US')
 }
 
 function harnessThemePreference(): 'light' | 'dark' | 'system' {
@@ -512,6 +520,7 @@ async function bootstrap(): Promise<void> {
 }
 
 configureAppIdentity()
+configureApplicationLocale()
 const singleInstance = app.requestSingleInstanceLock()
 if (!singleInstance) {
   app.quit()

@@ -89,7 +89,9 @@
     "electronLanguages": [
       "en-US",
       "zh-CN",
-      "zh-TW"
+      "zh_CN",
+      "zh-TW",
+      "zh_TW"
     ],
     "directories": {
       "output": "dist",
