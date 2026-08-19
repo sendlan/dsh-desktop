@@ -120,6 +120,10 @@
       {
         "from": "build/splash.html",
         "to": "splash.html"
+      },
+      {
+        "from": "build/plugin-recovery.html",
+        "to": "plugin-recovery.html"
       }
     ],
     "publish": [

@@ -248,12 +248,21 @@ ${cause}`
   }
 }
 
+function latestHarnessAttemptLogs(logLines: readonly string[]): readonly string[] {
+  for (let index = logLines.length - 1; index >= 0; index -= 1) {
+    if (logLines[index]?.trimStart().startsWith('[desktop] starting ')) {
+      return logLines.slice(index + 1)
+    }
+  }
+  return logLines
+}
+
 export function extractFailureCause(logLines: readonly string[]): string | undefined {
   const stderrLines: string[] = []
   let dshEntryError: string | undefined
   let uncaughtError: string | undefined
 
-  for (const line of logLines) {
+  for (const line of latestHarnessAttemptLogs(logLines)) {
     if (!line.startsWith('[stderr] ')) continue
     const text = line.slice(8)
     stderrLines.push(text)
@@ -295,38 +304,44 @@ export function extractFailureCause(logLines: readonly string[]): string | undef
 
 const CORE_BUNDLES = new Set(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
 
-export function extractOffendingPlugin(logLines: readonly string[]): string | undefined {
-  for (const line of logLines) {
+export function extractOffendingPlugins(logLines: readonly string[]): string[] {
+  const plugins = new Set<string>()
+
+  for (const line of latestHarnessAttemptLogs(logLines)) {
     if (!line.startsWith('[stderr] ')) continue
     const text = line.slice(8)
 
     const m1 = text.match(/failed to apply loader entry [^\s]+ \((@[^)]+|[^)]+)\)/i)
     if (m1 && m1[1] && !CORE_BUNDLES.has(m1[1].trim())) {
-      return m1[1].trim()
+      plugins.add(m1[1].trim())
     }
 
     const m2 = text.match(/cannot resolve profile bundle ["']([^"']+)["']/i)
     if (m2 && m2[1] && !CORE_BUNDLES.has(m2[1].trim())) {
-      return m2[1].trim()
+      plugins.add(m2[1].trim())
     }
 
     const m3 = text.match(/profile bundle ["']([^"']+)["'] declares no dsh\.bundle/i)
     if (m3 && m3[1] && !CORE_BUNDLES.has(m3[1].trim())) {
-      return m3[1].trim()
+      plugins.add(m3[1].trim())
     }
 
     const m4 = text.match(/failed to import loader entry [^\s]+ \((@[^)]+|[^)]+)\)/i)
     if (m4 && m4[1] && !CORE_BUNDLES.has(m4[1].trim())) {
-      return m4[1].trim()
+      plugins.add(m4[1].trim())
     }
 
     const m5 = text.match(/plugin\(s\) failed to load:\s*([a-zA-Z0-9@/_-]+)/i)
     if (m5 && m5[1] && !CORE_BUNDLES.has(m5[1].trim())) {
-      return m5[1].trim()
+      plugins.add(m5[1].trim())
     }
   }
 
-  return undefined
+  return [...plugins]
+}
+
+export function extractOffendingPlugin(logLines: readonly string[]): string | undefined {
+  return extractOffendingPlugins(logLines)[0]
 }
 
 export function formatExitCode(code: number): string {
