@@ -58,7 +58,9 @@ describe('LAN mobile page', () => {
     expect(html).toContain("fetch('/api/status',{cache:'no-store'})")
     expect(html).toContain('setInterval(checkConnection,1500)')
     expect(html).toContain("status.classList.add('error-state')")
-    expect(html).toContain('archived=new Set(value.archivedSessionIds||[])')
+    expect(html).toContain('archivedSessionIds=value.archivedSessionIds||[]')
+    expect(html).toContain('archived=new Set(archivedSessionIds)')
+    expect(html).not.toContain('new Set(value.archivedSessionIds||[])')
     expect(html).toContain('!archived.has(s.sessionId)')
   })
 

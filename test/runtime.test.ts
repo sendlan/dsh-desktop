@@ -3,6 +3,7 @@ import {
   buildHarnessArguments,
   buildHarnessSpawnOptions,
   buildNodeArguments,
+  extractFailureCause,
   formatExitCode
 } from '../src/main/runtime/harness-runtime'
 import { canGrantWindowPermission, isTrustedAppUrl } from '../src/main/security-policy'
@@ -85,6 +86,79 @@ describe('Harness launch contract', () => {
     expect(formatExitCode(4294930435)).toContain(
       '0xFFFF7003, Crashpad handler unavailable'
     )
+  })
+})
+
+
+
+describe('harness failure cause extraction', () => {
+  it('extracts the DSH entry failure message from stderr', () => {
+    const logs = [
+      '[stderr] [harness-node] DSH entry failed: Error: dsh: plugin tree failed to load',
+      '[stderr] AggregateError: loader entries failed to apply',
+    ]
+    expect(extractFailureCause(logs)).toBe('Error: dsh: plugin tree failed to load')
+  })
+
+  it('extracts uncaught exception messages from stderr', () => {
+    const logs = [
+      '[stderr] [harness-node] uncaught exception: ReferenceError: foo is not defined',
+    ]
+    expect(extractFailureCause(logs)).toBe('ReferenceError: foo is not defined')
+  })
+
+  it('extracts unhandled rejection messages from stderr', () => {
+    const logs = [
+      '[stderr] [harness-node] unhandled rejection: TypeError: cannot read property x of null',
+    ]
+    expect(extractFailureCause(logs)).toBe('TypeError: cannot read property x of null')
+  })
+
+  it('prefers DSH entry failure over uncaught error', () => {
+    const logs = [
+      '[stderr] [harness-node] uncaught exception: some error',
+      '[stderr] [harness-node] DSH entry failed: Error: plugin failed to load',
+    ]
+    expect(extractFailureCause(logs)).toBe('Error: plugin failed to load')
+  })
+
+  it('falls back to the last error-like stderr line', () => {
+    const logs = [
+      '[stderr] some random output',
+      '[stderr] another line',
+      '[stderr] FATAL: configuration error in settings.yaml',
+    ]
+    expect(extractFailureCause(logs)).toBe('FATAL: configuration error in settings.yaml')
+  })
+
+  it('falls back to the last stderr line when nothing matches', () => {
+    const logs = [
+      '[stderr] starting up',
+      '[stderr] something happened',
+      '[stderr] process exiting now',
+    ]
+    expect(extractFailureCause(logs)).toBe('process exiting now')
+  })
+
+  it('returns undefined when there are no stderr lines', () => {
+    const logs = [
+      '[stdout] normal output',
+      '[desktop] starting harness',
+    ]
+    expect(extractFailureCause(logs)).toBeUndefined()
+  })
+
+  it('returns undefined for empty log array', () => {
+    expect(extractFailureCause([])).toBeUndefined()
+  })
+
+  it('ignores long error lines (>200 chars) when falling back', () => {
+    const longLine = 'x'.repeat(250)
+    const logs = [
+      `[stderr] ${longLine}`,
+      '[stderr] short error message',
+    ]
+    expect(extractFailureCause(logs)).toBe('short error message')
   })
 })
 
