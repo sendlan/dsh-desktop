@@ -234,15 +234,24 @@ describe('GitHub release contract', () => {
       'utf8'
     )
 
+    // main mirrors upstream; loong64 merges OUR main, auto-resolving
+    // conflicts by keeping loong64's version (-X ours).
     expect(workflow).toContain('git merge-base --is-ancestor upstream/main')
     expect(workflow).toContain('git merge --no-edit upstream/main')
+    expect(workflow).toContain('git merge --no-edit -X ours origin/main')
+    expect(workflow).toContain('needs: sync-main')
     expect(workflow).toContain('git merge --abort')
     expect(workflow).toContain('gh pr create')
     expect(workflow).toContain('pull-requests: write')
+    // Pushing workflow-file changes requires SSH (deploy key) — the
+    // GITHUB_TOKEN has no 'workflows' permission.
+    expect(workflow).not.toContain('workflows: write')
+    expect(workflow).toContain('ref: main')
     expect(workflow).toContain('ref: loong64')
-    // Pushes only touch the fork's own branches; upstream is never modified.
-    expect(workflow).toContain('git push origin loong64')
-    expect(workflow).toContain('git push origin main')
+    // Pushes only touch the fork's own branches (via the SSH deploy key);
+    // upstream is never modified.
+    expect(workflow).toContain('ssh_push loong64')
+    expect(workflow).toContain('ssh_push main')
     expect(workflow).not.toContain('git push upstream')
     expect(workflow).not.toContain('git push dataelement')
   })
