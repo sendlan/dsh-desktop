@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
-  "author": "DataElement",
+  "author": "sendlan <sendlan@outlook.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,7 +23,7 @@
     "agent"
   ],
   "scripts": {
-    "postinstall": "bash scripts/loong64-setup.sh && patch-package && node scripts/install-brand-assets.mjs && install-electron --no",
+    "postinstall": "bash scripts/loong64-setup.sh && patch-package && node scripts/install-brand-assets.mjs && if [ \"$(uname -m)\" = \"loongarch64\" ]; then install-electron --no; fi",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "icons:generate": "node scripts/generate-app-icons.mjs",
@@ -169,6 +169,9 @@
       "target": [
         {
           "target": "dir"
+        },
+        {
+          "target": "deb"
         }
       ]
     },

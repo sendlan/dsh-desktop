@@ -5,9 +5,7 @@ import { describe, expect, it } from 'vitest'
 const projectRoot = path.resolve(import.meta.dirname, '..')
 
 const releaseAssets = [
-  'dsh-desktop-mac-arm64.dmg',
-  'dsh-desktop-mac-x64.dmg',
-  'dsh-desktop-windows-x64-setup.exe'
+  'dsh-desktop-linux-loong64.deb'
 ]
 
 describe('GitHub release contract', () => {
@@ -49,6 +47,7 @@ describe('GitHub release contract', () => {
       build: {
         artifactName: string
         extraResources: Array<{ from: string; to: string }>
+        linux: { target: Array<{ target: string }> }
         win: { target: Array<{ target: string; arch: string[] }> }
         nsis: { artifactName: string; include: string }
         portable?: unknown
@@ -74,6 +73,11 @@ describe('GitHub release contract', () => {
     expect(packageJson.build.nsis.include).toBe('build/installer.nsh')
     expect(packageJson.build.win.target).toEqual([{ target: 'nsis', arch: ['x64'] }])
     expect(packageJson.build.portable).toBeUndefined()
+    // The loong64 release ships the installable .deb plus the unpacked dir.
+    expect(packageJson.build.linux.target).toEqual([
+      { target: 'dir' },
+      { target: 'deb' }
+    ])
   })
 
   it('turns a selected Windows drive root into an application directory', async () => {
@@ -106,7 +110,7 @@ describe('GitHub release contract', () => {
     expect(patch).toContain("name: '@deepseek-ai/dsh-client-ui-directory-picker-native'")
   })
 
-  it('publishes update metadata for installed desktop builds', async () => {
+  it('keeps the generic update provider for installed desktop builds', async () => {
     const packageJson = JSON.parse(
       await readFile(path.join(projectRoot, 'package.json'), 'utf8')
     ) as {
@@ -116,28 +120,12 @@ describe('GitHub release contract', () => {
         win: { verifyUpdateCodeSignature: boolean }
       }
     }
-    const workflow = await readFile(
-      path.join(projectRoot, '.github', 'workflows', 'release.yml'),
-      'utf8'
-    )
 
     expect(packageJson.dependencies['electron-updater']).toBeTruthy()
     expect(packageJson.build.publish).toEqual([
       { provider: 'generic', url: 'https://dshdesktop.com/updates/latest/' }
     ])
     expect(packageJson.build.win.verifyUpdateCodeSignature).toBe(false)
-    for (const asset of [
-      'latest-mac-arm64.yml',
-      'latest-mac-x64.yml',
-      'latest-mac.yml',
-      'latest.yml',
-      'dsh-desktop-mac-arm64.zip.blockmap',
-      'dsh-desktop-mac-x64.zip.blockmap',
-      'dsh-desktop-windows-x64-setup.exe.blockmap'
-    ]) {
-      expect(workflow).toContain(asset)
-    }
-    expect(workflow).toContain('merge-mac-update-metadata.mjs')
   })
 
   it('keeps builder jobs from attempting implicit tag publishing', async () => {
@@ -149,10 +137,24 @@ describe('GitHub release contract', () => {
       'package:mac',
       'package:mac:arm64',
       'package:mac:x64',
-      'package:win'
+      'package:win',
+      'package:linux:loong64'
     ]) {
       expect(packageJson.scripts[script]).toContain('--publish never')
     }
+  })
+
+  it('downloads the electron runtime only on loongarch64 hosts', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as { scripts: Record<string, string> }
+
+    // The electron mirror is loong64-only, so hosted x64 runners must not try
+    // to download the electron binary during npm ci.
+    expect(packageJson.scripts.postinstall).toContain('loong64-setup.sh')
+    expect(packageJson.scripts.postinstall).toContain(
+      'if [ "$(uname -m)" = "loongarch64" ]; then install-electron --no; fi'
+    )
   })
 
   it('packages an isolated development channel from the current workspace', async () => {
@@ -182,63 +184,67 @@ describe('GitHub release contract', () => {
     expect(main).toContain('if (!developmentBuild)')
   })
 
-  it('builds and publishes every supported platform', async () => {
+  it('runs quality checks on hosted runners and publishes loong64 releases only', async () => {
     const workflow = await readFile(
       path.join(projectRoot, '.github', 'workflows', 'release.yml'),
       'utf8'
     )
 
-    expect(workflow).toContain('runs-on: macos-15')
-    expect(workflow).toContain('runs-on: macos-15-intel')
-    expect(workflow).toContain('runs-on: windows-2022')
-    expect(workflow).toContain('npm run package:dev:win')
-    expect(workflow).toContain('Smoke test packaged Windows Harness')
-    expect(workflow).toContain("$executable = 'dist-dev\\win-unpacked\\DSH Desktop Dev.exe'")
-    expect(workflow).toContain('Packaged Windows Harness smoke test passed.')
-    expect(workflow).toContain("Invoke-HarnessRpc 'workspace.create'")
-    expect(workflow).toContain("Invoke-HarnessRpc 'session.create'")
-    expect(workflow).toContain('Harness process exited after workspace and session creation.')
-    expect(workflow).toContain('windows_prerelease_tag:')
-    expect(workflow).toContain('Publish validated Windows development pre-release')
-    expect(workflow).toContain('gh release create $env:PRERELEASE_TAG')
-    expect(workflow).toContain('--prerelease')
-    expect(workflow).toContain('name: windows-x64-dev')
-    expect(workflow).toContain('dist-dev/dsh-desktop-dev-windows-x64-setup.exe')
+    // Quality gate on GitHub-hosted runners.
+    expect(workflow).toContain('runs-on: ubuntu-latest')
+    expect(workflow).not.toContain('ELECTRON_MIRROR')
+    expect(workflow).toContain('npm ci')
+    expect(workflow).toContain('npm test')
+    expect(workflow).toContain('npm run typecheck')
+
+    // Publish-only release flow (the .deb is built on a real loong64 machine).
+    expect(workflow).toContain('gh release create')
+    expect(workflow).toContain('--verify-tag')
+    expect(workflow).toContain('gh release upload')
+    expect(workflow).toContain('dsh-desktop-linux-loong64.deb')
+    expect(workflow).toContain('release_tag:')
+    expect(workflow).toContain('COS_SECRET_ID')
+    expect(workflow).toContain('coscli')
     for (const asset of releaseAssets) expect(workflow).toContain(asset)
-    expect(
-      workflow.match(
-        /npm version --no-git-tag-version --allow-same-version "\$\{\{ github\.ref_name \}\}"/g
-      )
-    ).toHaveLength(3)
   })
 
-  it('signs and notarizes both macOS architectures on tag releases', async () => {
+  it('no longer builds or signs macOS/Windows packages', async () => {
     const workflow = await readFile(
       path.join(projectRoot, '.github', 'workflows', 'release.yml'),
       'utf8'
     )
 
-    for (const secret of [
-      'DESKTOP_CSC_LINK',
-      'DESKTOP_CSC_KEY_PASSWORD',
-      'DESKTOP_APPLE_API_KEY',
-      'DESKTOP_APPLE_API_KEY_ID',
-      'DESKTOP_APPLE_API_ISSUER',
-      'DESKTOP_APPLE_TEAM_ID'
-    ]) {
-      expect(workflow).toContain(`secrets.${secret}`)
-    }
-    expect(workflow.match(/Prepare macOS signing keychain/g)).toHaveLength(2)
-    expect(workflow.match(/xcrun stapler validate/g)).toHaveLength(4)
-    expect(workflow.match(/xcrun notarytool submit/g)).toHaveLength(2)
-    expect(workflow.match(/CSC_IDENTITY_AUTO_DISCOVERY: 'false'/g)).toHaveLength(2)
-    expect(workflow).not.toContain("CSC_LINK: ''")
-    expect(workflow).toMatch(
-      /macos-apple-silicon:\r?\n    name: macOS Apple Silicon\r?\n    runs-on: macos-15\r?\n    steps:/
+    expect(workflow).not.toContain('runs-on: macos-15')
+    expect(workflow).not.toContain('runs-on: macos-15-intel')
+    expect(workflow).not.toContain('runs-on: windows-2022')
+    expect(workflow).not.toContain('package:dev:win')
+    expect(workflow).not.toContain('Smoke test packaged Windows Harness')
+    expect(workflow).not.toContain('npm run package:mac')
+    expect(workflow).not.toContain('npm run package:win')
+    expect(workflow).not.toContain('DESKTOP_CSC_LINK')
+    expect(workflow).not.toContain('DESKTOP_APPLE_API_KEY')
+    expect(workflow).not.toContain('xcrun notarytool')
+    expect(workflow).not.toContain('latest-mac-arm64.yml')
+    expect(workflow).not.toContain('npm version')
+  })
+
+  it('syncs upstream into the fork only, opening a PR when a merge conflicts', async () => {
+    const workflow = await readFile(
+      path.join(projectRoot, '.github', 'workflows', 'sync-upstream.yml'),
+      'utf8'
     )
-    expect(workflow).toMatch(
-      /macos-intel:\r?\n    name: macOS Intel\r?\n    if: [^\r\n]+\r?\n    runs-on: macos-15-intel\r?\n    steps:/
-    )
+
+    expect(workflow).toContain('git merge-base --is-ancestor upstream/main')
+    expect(workflow).toContain('git merge --no-edit upstream/main')
+    expect(workflow).toContain('git merge --abort')
+    expect(workflow).toContain('gh pr create')
+    expect(workflow).toContain('pull-requests: write')
+    expect(workflow).toContain('ref: loong64')
+    // Pushes only touch the fork's own branches; upstream is never modified.
+    expect(workflow).toContain('git push origin loong64')
+    expect(workflow).toContain('git push origin main')
+    expect(workflow).not.toContain('git push upstream')
+    expect(workflow).not.toContain('git push dataelement')
   })
 
   it('routes the published download through the official website', async () => {
