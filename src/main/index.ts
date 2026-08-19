@@ -12,10 +12,11 @@ import {
   shell,
   type MessageBoxOptions
 } from 'electron'
-import { HarnessRuntime } from './runtime/harness-runtime'
+import { extractFailureCause, extractOffendingPlugin, HarnessRuntime } from './runtime/harness-runtime'
 import { LanMobileBridge } from './mobile/lan-mobile-bridge'
 import { secureWindow } from './security'
 import { ensureLaunchRoot } from './state/launch-root'
+import { resetPluginProfile, uninstallPluginFromProfile } from './state/plugin-recovery'
 import { isAbortedNavigationError, shouldLoadHarnessUrl } from './window-navigation'
 import {
   checkForUpdates,
@@ -277,31 +278,63 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
   if (failureDialogVisible || quitting) return
   failureDialogVisible = true
 
+  const dshHome = join(app.getPath('userData'), 'harness')
+  const isChinese = harnessLocale() === 'zh'
+
   try {
     while (!quitting && runtime.snapshot().phase === 'failed') {
+      const offendingPlugin = extractOffendingPlugin(runtime.snapshot().logs)
+      const buttons = offendingPlugin
+        ? (isChinese
+            ? [`卸载 "${offendingPlugin}" 并重试`, '重试', '查看日志', '退出']
+            : [`Uninstall "${offendingPlugin}" & Retry`, 'Retry', 'Show Log', 'Quit'])
+        : (isChinese
+            ? ['重试', '查看日志', '退出']
+            : ['Retry', 'Show Log', 'Quit'])
+
+      const detailText = isChinese
+        ? (snapshot.launchDirectory
+            ? `工作区目录: ${snapshot.launchDirectory}\n\n${offendingPlugin ? `检测到插件 "${offendingPlugin}" 引发错误。可尝试一键卸载该插件并重试，或查看日志排查。` : '您可以重试或查看日志排查。'}`
+            : (offendingPlugin ? `检测到插件 "${offendingPlugin}" 引发错误。可尝试一键卸载该插件并重试，或查看日志排查。` : '您可以重试或查看日志排查。'))
+        : (snapshot.launchDirectory
+            ? `Launch directory: ${snapshot.launchDirectory}\n\n${offendingPlugin ? `Plugin "${offendingPlugin}" caused a startup error. You can uninstall it and retry, or inspect the Harness log.` : 'You can retry or inspect the Harness log.'}`
+            : (offendingPlugin ? `Plugin "${offendingPlugin}" caused a startup error. You can uninstall it and retry, or inspect the Harness log.` : 'You can retry or inspect the Harness log.'))
+
       const options: MessageBoxOptions = {
         type: 'error',
-        title: 'Harness could not start',
+        title: isChinese ? 'Harness 启动失败' : 'Harness could not start',
         message: snapshot.message,
-        detail: snapshot.launchDirectory
-          ? `Launch directory: ${snapshot.launchDirectory}\n\nYou can retry or inspect the Harness log.`
-          : 'You can retry or inspect the Harness log.',
-        buttons: ['Retry', 'Show Log', 'Quit'],
+        detail: detailText,
+        buttons,
         defaultId: 0,
-        cancelId: 2,
+        cancelId: buttons.length - 1,
         noLink: true
       }
       const result = mainWindow
         ? await dialog.showMessageBox(mainWindow, options)
         : await dialog.showMessageBox(options)
 
-      if (result.response === 0) {
-        await launchHarness()
-      } else if (result.response === 1) {
-        shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
-        continue
+      if (offendingPlugin) {
+        if (result.response === 0) {
+          await uninstallPluginFromProfile(dshHome, offendingPlugin)
+          await launchHarness()
+        } else if (result.response === 1) {
+          await launchHarness()
+        } else if (result.response === 2) {
+          shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+          continue
+        } else {
+          app.quit()
+        }
       } else {
-        app.quit()
+        if (result.response === 0) {
+          await launchHarness()
+        } else if (result.response === 1) {
+          shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+          continue
+        } else {
+          app.quit()
+        }
       }
 
       if (runtime.snapshot().phase !== 'failed') return
@@ -351,12 +384,12 @@ function installMenu(): void {
         },
         { type: 'separator' },
         {
-          label: 'Restart Harness',
+          label: isChinese ? '重启 Harness' : 'Restart Harness',
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => void launchHarness().catch(showUnexpectedError)
         },
         {
-          label: 'Show Harness Log',
+          label: isChinese ? '查看 Harness 日志' : 'Show Harness Log',
           click: () => shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
         },
         ...(process.platform === 'darwin'
@@ -506,6 +539,15 @@ async function bootstrap(): Promise<void> {
   })
   ipcMain.handle('mobile:open-pairing', () => showMobilePairing())
   ipcMain.handle('mobile:status', () => ({ connected: mobileBridge.snapshot().connected }))
+  ipcMain.handle('harness:show-log', () => {
+    shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+  })
+  ipcMain.handle('harness:reset-plugins', async (_event, pluginName?: string) => {
+    const dshHome = join(app.getPath('userData'), 'harness')
+    await resetPluginProfile(dshHome, pluginName)
+    await launchHarness()
+    return { ok: runtime.snapshot().phase === 'ready' }
+  })
   installMenu()
   await launchHarness()
   if (!developmentBuild) {

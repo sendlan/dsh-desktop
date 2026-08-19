@@ -6,13 +6,25 @@ import {
   updateMessage,
   type UpdateLocale
 } from './update-view'
+import {
+  isPluginLoadError,
+  extractPluginName,
+  pluginErrorMessage
+} from './plugin-error-view'
 
 const ROOT_ID = 'dsh-desktop-update-root'
+const PLUGIN_ERROR_ROOT_ID = 'dsh-desktop-plugin-error-root'
 const MOBILE_BUTTON_ID = 'dsh-desktop-mobile-button'
 const locale: UpdateLocale = navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 
 let host: HTMLDivElement | undefined
 let content: HTMLDivElement | undefined
+let pluginErrorHost: HTMLDivElement | undefined
+let pluginErrorContent: HTMLDivElement | undefined
+let activePluginErrorName: string | undefined
+let pluginErrorVisible = false
+let restartingHarness = false
+let resettingHarness = false
 let currentStatus: UpdateStatus | undefined
 let dismissedVersion: string | null = null
 let dismissedTransientPhase: UpdateStatus['phase'] | null = null
@@ -20,7 +32,59 @@ let installing = false
 let receivedStatusEvent = false
 let phoneConnected = false
 let mobileStatusTimer: number | undefined
-const mobileButtonObserver = new MutationObserver(mountMobileButton)
+
+function checkBootFailureInDom(): void {
+  const root = document.body || document.documentElement
+  if (!root) return
+  const divs = Array.from(root.querySelectorAll('div'))
+  const failedTitle = divs.find((el) => el.textContent?.trim() === 'Failed to load plugins')
+  if (!failedTitle || !failedTitle.parentElement) return
+
+  const failedContainer = failedTitle.parentElement
+  const errorText = failedContainer.textContent ?? ''
+  const pluginName = extractPluginName(errorText)
+
+  const INJECTED_ID = 'dsh-desktop-boot-recovery-actions'
+  if (document.getElementById(INJECTED_ID)) return
+
+  const actionsDiv = document.createElement('div')
+  actionsDiv.id = INJECTED_ID
+  actionsDiv.style.cssText = [
+    'display:flex',
+    'margin-top:20px',
+    'justify-content:center',
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif'
+  ].join(';')
+
+  const restartBtn = document.createElement('button')
+  restartBtn.type = 'button'
+  restartBtn.textContent = locale === 'zh' ? '重启 Harness' : 'Restart Harness'
+  restartBtn.style.cssText = [
+    'appearance:none',
+    'border:none',
+    'background:#4d6bfe',
+    'color:#ffffff',
+    'padding:9px 22px',
+    'border-radius:8px',
+    'font-size:13px',
+    'font-weight:600',
+    'cursor:pointer',
+    'box-shadow:0 2px 8px rgba(77,107,254,0.35)'
+  ].join(';')
+  restartBtn.addEventListener('click', () => {
+    restartBtn.disabled = true
+    restartBtn.textContent = locale === 'zh' ? '正在重启…' : 'Restarting…'
+    void ipcRenderer.invoke('harness:reset-plugins', pluginName)
+  })
+
+  actionsDiv.appendChild(restartBtn)
+  failedContainer.appendChild(actionsDiv)
+}
+
+const domObserver = new MutationObserver(() => {
+  mountMobileButton()
+  checkBootFailureInDom()
+})
 
 contextBridge.exposeInMainWorld('dshDesktopDirectoryPicker', {
   pick: (): Promise<string | null> => ipcRenderer.invoke('directory-picker:open')
@@ -78,16 +142,30 @@ async function refreshMobileStatus(): Promise<void> {
 
 function initializeUi(): void {
   mount()
+  mountPluginErrorCard()
   mountMobileButton()
-  mobileButtonObserver.observe(document.documentElement, {
+  checkBootFailureInDom()
+  domObserver.observe(document.documentElement, {
     childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ['data-dsh-sidebar-wide']
+    subtree: true
   })
   void refreshMobileStatus()
   mobileStatusTimer ??= window.setInterval(() => void refreshMobileStatus(), 1000)
 }
+
+window.addEventListener('error', (event) => {
+  const err = event.error ?? event.message
+  if (isPluginLoadError(err)) {
+    showPluginErrorNotification(extractPluginName(err))
+  }
+})
+
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason
+  if (isPluginLoadError(reason)) {
+    showPluginErrorNotification(extractPluginName(reason))
+  }
+})
 
 contextBridge.exposeInMainWorld(
   'dshDesktop',
@@ -95,6 +173,115 @@ contextBridge.exposeInMainWorld(
     restartHarness: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('harness:restart')
   })
 )
+
+function mountPluginErrorCard(): void {
+  if (document.getElementById(PLUGIN_ERROR_ROOT_ID)) return
+
+  pluginErrorHost = document.createElement('div')
+  pluginErrorHost.id = PLUGIN_ERROR_ROOT_ID
+  pluginErrorHost.style.cssText = [
+    'position:fixed',
+    'right:20px',
+    'bottom:20px',
+    'z-index:2147483647',
+    'display:none',
+    'width:min(384px,calc(100vw - 40px))',
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif'
+  ].join(';')
+
+  const shadow = pluginErrorHost.attachShadow({ mode: 'closed' })
+  const style = document.createElement('style')
+  style.textContent = styles
+  pluginErrorContent = document.createElement('div')
+  shadow.append(style, pluginErrorContent)
+  document.documentElement.appendChild(pluginErrorHost)
+  renderPluginError()
+}
+
+function showPluginErrorNotification(pluginName?: string): void {
+  activePluginErrorName = pluginName || activePluginErrorName
+  pluginErrorVisible = true
+  mountPluginErrorCard()
+  renderPluginError()
+}
+
+function dismissPluginError(): void {
+  pluginErrorVisible = false
+  if (pluginErrorHost) {
+    pluginErrorHost.style.display = 'none'
+  }
+}
+
+function renderPluginError(): void {
+  if (!pluginErrorHost || !pluginErrorContent) return
+
+  if (!pluginErrorVisible) {
+    pluginErrorHost.style.display = 'none'
+    pluginErrorContent.replaceChildren()
+    return
+  }
+
+  pluginErrorHost.style.display = 'block'
+  const info = pluginErrorMessage(locale, activePluginErrorName)
+
+  const card = element('aside', 'card')
+  card.setAttribute('aria-live', 'polite')
+  card.setAttribute('aria-label', info.title)
+
+  const row = element('div', 'row')
+  const indicator = element('span', restartingHarness || resettingHarness ? 'spinner' : 'dot warning')
+  indicator.setAttribute('aria-hidden', 'true')
+  row.appendChild(indicator)
+
+  const body = element('div', 'body')
+  const title = element('p', 'message')
+  title.textContent = info.title
+  body.appendChild(title)
+
+  const detail = element('p', 'detail')
+  detail.textContent = info.message
+  body.appendChild(detail)
+
+  const actions = element('div', 'actions')
+  const restartBtn = button(
+    restartingHarness
+      ? locale === 'zh'
+        ? '正在重启…'
+        : 'Restarting…'
+      : locale === 'zh'
+        ? '重启 Harness'
+        : 'Restart Harness',
+    'primary'
+  )
+  restartBtn.disabled = restartingHarness
+  restartBtn.addEventListener('click', () => {
+    restartingHarness = true
+    renderPluginError()
+    void ipcRenderer
+      .invoke('harness:reset-plugins', activePluginErrorName)
+      .finally(() => {
+        restartingHarness = false
+        dismissPluginError()
+      })
+  })
+
+  const ignoreBtn = button(locale === 'zh' ? '忽略' : 'Dismiss', 'secondary')
+  ignoreBtn.disabled = restartingHarness
+  ignoreBtn.addEventListener('click', dismissPluginError)
+
+  actions.append(restartBtn, ignoreBtn)
+  body.appendChild(actions)
+
+  row.appendChild(body)
+
+  const close = button('×', 'close')
+  close.setAttribute('aria-label', locale === 'zh' ? '关闭' : 'Close')
+  close.addEventListener('click', dismissPluginError)
+  row.appendChild(close)
+
+  card.appendChild(row)
+  pluginErrorContent.replaceChildren(card)
+}
 
 function mount(): void {
   if (document.getElementById(ROOT_ID)) return
@@ -280,6 +467,10 @@ const styles = `
     border-radius: 999px;
     background: #4d6bfe;
     box-shadow: 0 0 0 4px rgba(77, 107, 254, 0.12);
+  }
+  .dot.warning {
+    background: #f59e0b;
+    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.18);
   }
   .spinner {
     width: 17px;
