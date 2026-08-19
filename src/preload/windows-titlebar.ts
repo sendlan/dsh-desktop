@@ -6,9 +6,7 @@ import {
 
 const HOST_ID = 'dsh-desktop-windows-titlebar'
 const LAYOUT_STYLE_ID = `${HOST_ID}-layout`
-const FLUSH_SIDEBAR_CLASS = 'dsh-desktop-windows-sidebar-flush'
 const SIDEBAR_WIDTH_PROPERTY = '--dsh-desktop-windows-sidebar-width'
-const CONTENT_COLUMN_ATTRIBUTE = 'data-dsh-desktop-windows-content-column'
 
 type MenuEntry =
   | { kind: 'command'; command: DesktopMenuCommand; label: string; shortcut?: string }
@@ -121,19 +119,11 @@ function installLayout(document: Document): void {
     body.dsh-desktop-windows-titlebar-layout {
       box-sizing: border-box !important;
       height: 100% !important;
-      padding-top: ${WINDOWS_TITLEBAR_HEIGHT}px !important;
-    }
-    body.dsh-desktop-windows-titlebar-layout.${FLUSH_SIDEBAR_CLASS} {
       padding-top: 0 !important;
     }
     body.dsh-desktop-windows-titlebar-layout > #root {
       height: 100% !important;
       min-height: 0 !important;
-    }
-    body.dsh-desktop-windows-titlebar-layout [${CONTENT_COLUMN_ATTRIBUTE}] {
-      box-sizing: border-box !important;
-      min-height: 0 !important;
-      padding-top: ${WINDOWS_TITLEBAR_HEIGHT}px !important;
     }
     body.dsh-desktop-windows-titlebar-layout [data-dsh-sidebar-root][data-dsh-sidebar-wide="true"] {
       padding-top: 6px !important;
@@ -157,13 +147,8 @@ function trackSidebarLayout(document: Document): void {
   const sync = (): void => {
     const sidebarRoot = document.querySelector<HTMLElement>('[data-dsh-sidebar-root]')
     const sidebarColumn = sidebarRoot?.parentElement ?? null
-    const centerColumn = sidebarColumn?.nextElementSibling as HTMLElement | null
-    const detailsColumn = centerColumn?.nextElementSibling as HTMLElement | null
-    if (!sidebarColumn || !centerColumn || !detailsColumn) return
+    if (!sidebarColumn) return
 
-    centerColumn.setAttribute(CONTENT_COLUMN_ATTRIBUTE, '')
-    detailsColumn.setAttribute(CONTENT_COLUMN_ATTRIBUTE, '')
-    document.body.classList.add(FLUSH_SIDEBAR_CLASS)
     if (sidebarColumn !== observedSidebarColumn) {
       if (observedSidebarColumn) resizeObserver.unobserve(observedSidebarColumn)
       observedSidebarColumn = sidebarColumn
@@ -350,26 +335,11 @@ const titlebarStyles = `
     width: 100vw;
     height: ${WINDOWS_TITLEBAR_HEIGHT}px;
     color: var(--dsw-alias-label-primary, #202124);
-    background: linear-gradient(
-      to right,
-      transparent 0,
-      transparent var(${SIDEBAR_WIDTH_PROPERTY}, 280px),
-      var(--dsw-specific-sidebar-fill, #f7f8fa) var(${SIDEBAR_WIDTH_PROPERTY}, 280px),
-      var(--dsw-specific-sidebar-fill, #f7f8fa) 100%
-    );
+    background: transparent;
     font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
-    -webkit-app-region: drag;
+    -webkit-app-region: no-drag;
     pointer-events: none;
     user-select: none;
-  }
-  .bar::after {
-    content: "";
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    left: var(${SIDEBAR_WIDTH_PROPERTY}, 280px);
-    height: 1px;
-    background: var(--dsw-alias-border-l1, rgba(32, 33, 36, 0.08));
   }
   .safeArea {
     position: absolute;
@@ -387,7 +357,7 @@ const titlebarStyles = `
     position: absolute;
     top: 0;
     right: 44px;
-    bottom: 0;
+    height: 5px;
     left: var(${SIDEBAR_WIDTH_PROPERTY}, 280px);
     pointer-events: auto;
     -webkit-app-region: drag;

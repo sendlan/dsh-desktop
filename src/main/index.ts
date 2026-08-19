@@ -59,7 +59,7 @@ const developmentBuild = isDevelopmentBuild()
 
 function windowsTitleBarOverlay(isDark: boolean): Electron.TitleBarOverlayOptions {
   return {
-    color: isDark ? '#19191b' : '#f7f8fa',
+    color: '#00000000',
     symbolColor: isDark ? '#f3f4f6' : '#202124',
     height: WINDOWS_TITLEBAR_HEIGHT
   }
