@@ -19,11 +19,20 @@ describe('Windows titlebar menu', () => {
     expect(main).toContain('Menu.setApplicationMenu(Menu.buildFromTemplate(template))')
   })
 
-  it('reserves a draggable titlebar without covering the Harness root', async () => {
+  it('keeps the Windows sidebar full-height while reserving the titlebar for content', async () => {
     const preload = await readFile('src/preload/windows-titlebar.ts', 'utf8')
 
     expect(WINDOWS_TITLEBAR_HEIGHT).toBe(36)
     expect(preload).toContain(`padding-top: \${WINDOWS_TITLEBAR_HEIGHT}px !important`)
+    expect(preload).toContain(`body.dsh-desktop-windows-titlebar-layout.\${FLUSH_SIDEBAR_CLASS}`)
+    expect(preload).toContain('padding-top: 0 !important')
+    expect(preload).toContain(`[\${CONTENT_COLUMN_ATTRIBUTE}]`)
+    expect(preload).toContain('[data-dsh-sidebar-root][data-dsh-sidebar-wide="true"]')
+    expect(preload).toContain('padding-top: 6px !important')
+    expect(preload).toContain('trackSidebarLayout(document)')
+    expect(preload).toContain("document.documentElement.style.setProperty(SIDEBAR_WIDTH_PROPERTY")
+    expect(preload).toContain('transparent var(${SIDEBAR_WIDTH_PROPERTY}, 280px)')
+    expect(preload).toContain('.safeArea::before')
     expect(preload).toContain('body.dsh-desktop-windows-titlebar-layout > #root')
     expect(preload).toContain('-webkit-app-region: drag')
     expect(preload).toContain('-webkit-app-region: no-drag')

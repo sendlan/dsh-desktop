@@ -6,6 +6,9 @@ import {
 
 const HOST_ID = 'dsh-desktop-windows-titlebar'
 const LAYOUT_STYLE_ID = `${HOST_ID}-layout`
+const FLUSH_SIDEBAR_CLASS = 'dsh-desktop-windows-sidebar-flush'
+const SIDEBAR_WIDTH_PROPERTY = '--dsh-desktop-windows-sidebar-width'
+const CONTENT_COLUMN_ATTRIBUTE = 'data-dsh-desktop-windows-content-column'
 
 type MenuEntry =
   | { kind: 'command'; command: DesktopMenuCommand; label: string; shortcut?: string }
@@ -24,6 +27,7 @@ export function mountWindowsTitlebar(options: TitlebarMountOptions): void {
   if (!document.body || document.getElementById(HOST_ID)) return
 
   installLayout(document)
+  trackSidebarLayout(document)
 
   const host = document.createElement('div')
   host.id = HOST_ID
@@ -119,12 +123,58 @@ function installLayout(document: Document): void {
       height: 100% !important;
       padding-top: ${WINDOWS_TITLEBAR_HEIGHT}px !important;
     }
+    body.dsh-desktop-windows-titlebar-layout.${FLUSH_SIDEBAR_CLASS} {
+      padding-top: 0 !important;
+    }
     body.dsh-desktop-windows-titlebar-layout > #root {
       height: 100% !important;
       min-height: 0 !important;
     }
+    body.dsh-desktop-windows-titlebar-layout [${CONTENT_COLUMN_ATTRIBUTE}] {
+      box-sizing: border-box !important;
+      min-height: 0 !important;
+      padding-top: ${WINDOWS_TITLEBAR_HEIGHT}px !important;
+    }
+    body.dsh-desktop-windows-titlebar-layout [data-dsh-sidebar-root][data-dsh-sidebar-wide="true"] {
+      padding-top: 6px !important;
+    }
   `
   document.head.appendChild(style)
+}
+
+function trackSidebarLayout(document: Document): void {
+  let observedSidebarColumn: HTMLElement | null = null
+  const resizeObserver = new ResizeObserver(() => updateSidebarWidth())
+
+  const updateSidebarWidth = (): void => {
+    if (!observedSidebarColumn) return
+    const width = observedSidebarColumn.getBoundingClientRect().width
+    if (width > 0) {
+      document.documentElement.style.setProperty(SIDEBAR_WIDTH_PROPERTY, `${width}px`)
+    }
+  }
+
+  const sync = (): void => {
+    const sidebarRoot = document.querySelector<HTMLElement>('[data-dsh-sidebar-root]')
+    const sidebarColumn = sidebarRoot?.parentElement ?? null
+    const centerColumn = sidebarColumn?.nextElementSibling as HTMLElement | null
+    const detailsColumn = centerColumn?.nextElementSibling as HTMLElement | null
+    if (!sidebarColumn || !centerColumn || !detailsColumn) return
+
+    centerColumn.setAttribute(CONTENT_COLUMN_ATTRIBUTE, '')
+    detailsColumn.setAttribute(CONTENT_COLUMN_ATTRIBUTE, '')
+    document.body.classList.add(FLUSH_SIDEBAR_CLASS)
+    if (sidebarColumn !== observedSidebarColumn) {
+      if (observedSidebarColumn) resizeObserver.unobserve(observedSidebarColumn)
+      observedSidebarColumn = sidebarColumn
+      resizeObserver.observe(sidebarColumn)
+    }
+    updateSidebarWidth()
+  }
+
+  const observer = new MutationObserver(sync)
+  observer.observe(document.documentElement, { childList: true, subtree: true })
+  sync()
 }
 
 function renderMenu(
@@ -300,11 +350,26 @@ const titlebarStyles = `
     width: 100vw;
     height: ${WINDOWS_TITLEBAR_HEIGHT}px;
     color: var(--dsw-alias-label-primary, #202124);
-    background: var(--dsw-specific-sidebar-fill, #f7f8fa);
-    border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(32, 33, 36, 0.08));
+    background: linear-gradient(
+      to right,
+      transparent 0,
+      transparent var(${SIDEBAR_WIDTH_PROPERTY}, 280px),
+      var(--dsw-specific-sidebar-fill, #f7f8fa) var(${SIDEBAR_WIDTH_PROPERTY}, 280px),
+      var(--dsw-specific-sidebar-fill, #f7f8fa) 100%
+    );
     font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
     -webkit-app-region: drag;
+    pointer-events: none;
     user-select: none;
+  }
+  .bar::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: var(${SIDEBAR_WIDTH_PROPERTY}, 280px);
+    height: 1px;
+    background: var(--dsw-alias-border-l1, rgba(32, 33, 36, 0.08));
   }
   .safeArea {
     position: absolute;
@@ -316,6 +381,16 @@ const titlebarStyles = `
     justify-content: flex-end;
     align-items: stretch;
     pointer-events: none;
+  }
+  .safeArea::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 44px;
+    bottom: 0;
+    left: var(${SIDEBAR_WIDTH_PROPERTY}, 280px);
+    pointer-events: auto;
+    -webkit-app-region: drag;
   }
   .menuButton {
     appearance: none;
@@ -421,7 +496,7 @@ const titlebarStyles = `
   }
   .zoomReset { font-size: 11px; }
   @media (prefers-color-scheme: dark) {
-    .bar { color: var(--dsw-alias-label-primary, #f3f4f6); background: var(--dsw-specific-sidebar-fill, #19191b); }
+    .bar { color: var(--dsw-alias-label-primary, #f3f4f6); }
     .menu { color: var(--dsw-alias-label-primary, #f3f4f6); background: var(--dsw-specific-menu, #28282b); border-color: rgba(255,255,255,.12); box-shadow: 0 18px 42px rgba(0,0,0,.46); }
     .menuButton { color: var(--dsw-alias-label-secondary, #b5b7bd); border-left-color: rgba(255,255,255,.08); }
   }
