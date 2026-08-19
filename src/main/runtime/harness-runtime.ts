@@ -68,6 +68,20 @@ export function buildNodeArguments(
   ]
 }
 
+export function updateReadyStability(
+  readySince: number | undefined,
+  healthy: boolean,
+  now: number,
+  stabilityWindowMs = 500
+): { readySince: number | undefined; ready: boolean } {
+  if (!healthy) return { readySince: undefined, ready: false }
+  const stableSince = readySince ?? now
+  return {
+    readySince: stableSince,
+    ready: now - stableSince >= stabilityWindowMs
+  }
+}
+
 export class HarnessRuntime {
   private child?: ChildProcessWithoutNullStreams
   private logStream?: WriteStream
@@ -248,12 +262,21 @@ ${cause}`
   }
 }
 
+function latestHarnessAttemptLogs(logLines: readonly string[]): readonly string[] {
+  for (let index = logLines.length - 1; index >= 0; index -= 1) {
+    if (logLines[index]?.trimStart().startsWith('[desktop] starting ')) {
+      return logLines.slice(index + 1)
+    }
+  }
+  return logLines
+}
+
 export function extractFailureCause(logLines: readonly string[]): string | undefined {
   const stderrLines: string[] = []
   let dshEntryError: string | undefined
   let uncaughtError: string | undefined
 
-  for (const line of logLines) {
+  for (const line of latestHarnessAttemptLogs(logLines)) {
     if (!line.startsWith('[stderr] ')) continue
     const text = line.slice(8)
     stderrLines.push(text)
@@ -295,38 +318,44 @@ export function extractFailureCause(logLines: readonly string[]): string | undef
 
 const CORE_BUNDLES = new Set(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
 
-export function extractOffendingPlugin(logLines: readonly string[]): string | undefined {
-  for (const line of logLines) {
+export function extractOffendingPlugins(logLines: readonly string[]): string[] {
+  const plugins = new Set<string>()
+
+  for (const line of latestHarnessAttemptLogs(logLines)) {
     if (!line.startsWith('[stderr] ')) continue
     const text = line.slice(8)
 
     const m1 = text.match(/failed to apply loader entry [^\s]+ \((@[^)]+|[^)]+)\)/i)
     if (m1 && m1[1] && !CORE_BUNDLES.has(m1[1].trim())) {
-      return m1[1].trim()
+      plugins.add(m1[1].trim())
     }
 
     const m2 = text.match(/cannot resolve profile bundle ["']([^"']+)["']/i)
     if (m2 && m2[1] && !CORE_BUNDLES.has(m2[1].trim())) {
-      return m2[1].trim()
+      plugins.add(m2[1].trim())
     }
 
     const m3 = text.match(/profile bundle ["']([^"']+)["'] declares no dsh\.bundle/i)
     if (m3 && m3[1] && !CORE_BUNDLES.has(m3[1].trim())) {
-      return m3[1].trim()
+      plugins.add(m3[1].trim())
     }
 
     const m4 = text.match(/failed to import loader entry [^\s]+ \((@[^)]+|[^)]+)\)/i)
     if (m4 && m4[1] && !CORE_BUNDLES.has(m4[1].trim())) {
-      return m4[1].trim()
+      plugins.add(m4[1].trim())
     }
 
     const m5 = text.match(/plugin\(s\) failed to load:\s*([a-zA-Z0-9@/_-]+)/i)
     if (m5 && m5[1] && !CORE_BUNDLES.has(m5[1].trim())) {
-      return m5[1].trim()
+      plugins.add(m5[1].trim())
     }
   }
 
-  return undefined
+  return [...plugins]
+}
+
+export function extractOffendingPlugin(logLines: readonly string[]): string | undefined {
+  return extractOffendingPlugins(logLines)[0]
 }
 
 export function formatExitCode(code: number): string {
@@ -362,14 +391,24 @@ async function waitUntilReady(
   timeoutMs: number
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
+  const stabilityWindowMs = 500
+  let readySince: number | undefined
   while (Date.now() < deadline && isAlive()) {
     try {
       const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(1_000) })
-      if (response.status >= 200 && response.status < 500) return true
+      const stability = updateReadyStability(
+        readySince,
+        response.status >= 200 && response.status < 500,
+        Date.now(),
+        stabilityWindowMs
+      )
+      readySince = stability.readySince
+      if (stability.ready) return true
     } catch {
       // The server is expected to reject connections while it is booting.
+      readySince = updateReadyStability(readySince, false, Date.now()).readySince
     }
-    await new Promise((resolve) => setTimeout(resolve, 250))
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
   return false
 }

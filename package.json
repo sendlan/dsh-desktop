@@ -120,6 +120,14 @@
       {
         "from": "build/splash.html",
         "to": "splash.html"
+      },
+      {
+        "from": "build/dsh-loader.gif",
+        "to": "dsh-loader.gif"
+      },
+      {
+        "from": "build/plugin-recovery.html",
+        "to": "plugin-recovery.html"
       }
     ],
     "publish": [

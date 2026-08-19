@@ -5,7 +5,9 @@ import {
   buildNodeArguments,
   extractFailureCause,
   extractOffendingPlugin,
-  formatExitCode
+  extractOffendingPlugins,
+  formatExitCode,
+  updateReadyStability
 } from '../src/main/runtime/harness-runtime'
 import { canGrantWindowPermission, isTrustedAppUrl } from '../src/main/security-policy'
 import {
@@ -14,6 +16,18 @@ import {
 } from '../src/main/window-navigation'
 
 describe('Harness launch contract', () => {
+  it('does not treat a briefly reachable port as a completed Harness startup', () => {
+    const firstProbe = updateReadyStability(undefined, true, 1_000)
+    expect(firstProbe).toEqual({ readySince: 1_000, ready: false })
+
+    const interruptedProbe = updateReadyStability(firstProbe.readySince, false, 1_400)
+    expect(interruptedProbe).toEqual({ readySince: undefined, ready: false })
+
+    const restartedProbe = updateReadyStability(interruptedProbe.readySince, true, 2_000)
+    expect(updateReadyStability(restartedProbe.readySince, true, 2_499).ready).toBe(false)
+    expect(updateReadyStability(restartedProbe.readySince, true, 2_500).ready).toBe(true)
+  })
+
   it('binds the web server to a random loopback port', () => {
     expect(buildHarnessArguments(43127)).toEqual([
       'web',
@@ -153,6 +167,16 @@ describe('harness failure cause extraction', () => {
     expect(extractFailureCause([])).toBeUndefined()
   })
 
+  it('uses only the latest Harness launch when earlier attempts also failed', () => {
+    const logs = [
+      '[desktop] starting 2026-08-19T08:00:00.000Z',
+      '[stderr] [harness-node] DSH entry failed: Error: first plugin failed',
+      '[desktop] starting 2026-08-19T08:01:00.000Z',
+      '[stderr] [harness-node] DSH entry failed: Error: second plugin failed'
+    ]
+    expect(extractFailureCause(logs)).toBe('Error: second plugin failed')
+  })
+
   it('ignores long error lines (>200 chars) when falling back', () => {
     const longLine = 'x'.repeat(250)
     const logs = [
@@ -205,6 +229,29 @@ describe('offending plugin extraction', () => {
       '[stderr] [harness-node] uncaught exception: ReferenceError: x is not defined'
     ]
     expect(extractOffendingPlugin(logs)).toBeUndefined()
+  })
+
+  it('collects multiple unique plugins reported by the same launch', () => {
+    const logs = [
+      '[desktop] starting 2026-08-19T08:00:00.000Z',
+      '[stderr] Error: failed to apply loader entry sidebar (dsh-better-sidebar): duplicate prefix route "/sidebar/api"',
+      '[stderr] Error: failed to import loader entry tools (@example/dsh-tools): missing dependency',
+      '[stderr] Error: failed to apply loader entry sidebar (dsh-better-sidebar): duplicate prefix route "/sidebar/api"'
+    ]
+    expect(extractOffendingPlugins(logs)).toEqual([
+      'dsh-better-sidebar',
+      '@example/dsh-tools'
+    ])
+  })
+
+  it('does not keep offering a plugin removed during an earlier launch', () => {
+    const logs = [
+      '[desktop] starting 2026-08-19T08:00:00.000Z',
+      '[stderr] Error: failed to apply loader entry sidebar (first-plugin): duplicate prefix route "/sidebar/api"',
+      '[desktop] starting 2026-08-19T08:01:00.000Z',
+      '[stderr] Error: failed to apply loader entry panel (second-plugin): duplicate prefix route "/panel/api"'
+    ]
+    expect(extractOffendingPlugins(logs)).toEqual(['second-plugin'])
   })
 })
 
