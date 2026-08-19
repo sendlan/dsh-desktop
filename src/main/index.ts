@@ -27,6 +27,7 @@ import {
 } from './update/update-manager'
 import type { RuntimeSnapshot } from '../shared/contracts'
 import { resolveHarnessLocale } from './application-locale'
+import { installContextMenu } from './context-menu'
 import {
   WINDOWS_TITLEBAR_HEIGHT,
   isDesktopMenuCommand,
@@ -249,6 +250,7 @@ function createWindow(): BrowserWindow {
     window.setTitle('')
   })
   secureWindow(window)
+  installContextMenu(window, harnessLocale)
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = undefined
   })
