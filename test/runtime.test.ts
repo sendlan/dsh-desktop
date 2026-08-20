@@ -31,6 +31,7 @@ describe('Harness launch contract', () => {
   it('binds the web server to a random loopback port', () => {
     expect(buildHarnessArguments(43127)).toEqual([
       'web',
+      '--no-open',
       '--host',
       '127.0.0.1',
       '--port',

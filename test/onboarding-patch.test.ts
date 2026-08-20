@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { describe, expect, it } from 'vitest'
+import { patchPath } from './patch-path'
 
 const PI_AI_ONBOARDING_PROVIDERS = [
   'openai',

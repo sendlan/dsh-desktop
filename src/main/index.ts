@@ -564,9 +564,6 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
         app.quit()
         return
       }
-
-      if (runtime.snapshot().phase !== 'failed') return
-      snapshot = runtime.snapshot()
     }
   } catch (error) {
     showUnexpectedError(error)
