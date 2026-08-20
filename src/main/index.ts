@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { existsSync, readFileSync } from "node:fs"
-import { rename, stat, mkdir } from "node:fs/promises"
 import { parse } from 'yaml'
 import {
   app,
@@ -11,12 +10,14 @@ import {
   Menu,
   nativeTheme,
   shell,
+  type IpcMainInvokeEvent,
   type MessageBoxOptions
 } from 'electron'
-import { HarnessRuntime } from './runtime/harness-runtime'
+import { extractFailureCause, extractOffendingPlugins, HarnessRuntime } from './runtime/harness-runtime'
 import { LanMobileBridge } from './mobile/lan-mobile-bridge'
 import { secureWindow } from './security'
 import { ensureLaunchRoot } from './state/launch-root'
+import { resetPluginProfile, uninstallPluginFromProfile } from './state/plugin-recovery'
 import { isAbortedNavigationError, shouldLoadHarnessUrl } from './window-navigation'
 import {
   checkForUpdates,
@@ -26,6 +27,21 @@ import {
 } from './update/update-manager'
 import type { RuntimeSnapshot } from '../shared/contracts'
 import { resolveHarnessLocale } from './application-locale'
+import { installContextMenu } from './context-menu'
+import {
+  WINDOWS_TITLEBAR_HEIGHT,
+  isDesktopMenuCommand,
+  type DesktopMenuCommand
+} from '../shared/desktop-menu'
+import { buildPluginRecoveryViewModel } from './plugin-recovery-view'
+
+type PluginRecoveryAction = 'uninstall' | 'show-log' | 'quit' | 'restart'
+
+const PLUGIN_RECOVERY_ACTIONS = new Set<PluginRecoveryAction>([
+  'uninstall',
+  'show-log',
+  'quit'
+])
 
 let mainWindow: BrowserWindow | undefined
 let mobileWindow: BrowserWindow | undefined
@@ -33,8 +49,10 @@ let runtime: HarnessRuntime
 let mobileBridge: LanMobileBridge
 let launchDirectory: string
 let quitting = false
-let failureDialogVisible = false
+let failureRecoveryVisible = false
 let harnessLaunchOperation: Promise<void> | undefined
+let pluginRecoveryActionResolver: ((action: PluginRecoveryAction) => void) | undefined
+let mainWindowNavigationVersion = 0
 
 function isDevelopmentBuild(): boolean {
   if (!app.isPackaged) return true
@@ -50,6 +68,22 @@ function isDevelopmentBuild(): boolean {
 }
 
 const developmentBuild = isDevelopmentBuild()
+
+function windowsTitleBarOverlay(isDark: boolean): Electron.TitleBarOverlayOptions {
+  return {
+    color: '#00000000',
+    symbolColor: isDark ? '#f3f4f6' : '#202124',
+    height: WINDOWS_TITLEBAR_HEIGHT
+  }
+}
+
+function applyWindowChromeTheme(window: BrowserWindow, isDark: boolean): void {
+  if (window.isDestroyed()) return
+  window.setBackgroundColor(isDark ? '#141416' : '#ffffff')
+  if (process.platform === 'win32') {
+    window.setTitleBarOverlay(windowsTitleBarOverlay(isDark))
+  }
+}
 
 function configureAppIdentity(): void {
   if (developmentBuild) {
@@ -97,10 +131,17 @@ async function syncNativeTheme(window: BrowserWindow): Promise<void> {
           document.body.appendChild(dragRegion)
         }
       }
-      return document.body.hasAttribute('data-ds-dark-theme')
+      if (document.body.hasAttribute('data-ds-dark-theme')) return true
+      const color = getComputedStyle(document.body).backgroundColor
+      const channels = color.match(/[\\d.]+/g)?.slice(0, 3).map(Number)
+      if (!channels || channels.length < 3) {
+        return matchMedia('(prefers-color-scheme: dark)').matches
+      }
+      const [red, green, blue] = channels
+      return red * 0.2126 + green * 0.7152 + blue * 0.0722 < 128
     })()`
   )
-  window.setBackgroundColor(isDark ? '#141416' : '#ffffff')
+  applyWindowChromeTheme(window, isDark)
 }
 
 function dshEntryPath(): string {
@@ -182,7 +223,38 @@ function harnessThemePreference(): 'light' | 'dark' | 'system' {
   }
 }
 
+function isPluginRecoveryPage(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'file:' && parsed.pathname.endsWith('/plugin-recovery.html')
+  } catch {
+    return false
+  }
+}
+
+function resolvePluginRecoveryAction(action: PluginRecoveryAction): void {
+  const resolve = pluginRecoveryActionResolver
+  pluginRecoveryActionResolver = undefined
+  resolve?.(action)
+}
+
+function installPluginRecoveryNavigation(window: BrowserWindow): void {
+  window.webContents.on('will-navigate', (event, targetUrl) => {
+    if (!targetUrl.startsWith('dsh-recovery://')) return
+    event.preventDefault()
+    if (!isPluginRecoveryPage(window.webContents.getURL())) return
+
+    try {
+      const action = new URL(targetUrl).hostname as PluginRecoveryAction
+      if (PLUGIN_RECOVERY_ACTIONS.has(action)) resolvePluginRecoveryAction(action)
+    } catch {
+      // Ignore malformed recovery actions and keep the current recovery page visible.
+    }
+  })
+}
+
 function createWindow(): BrowserWindow {
+  const isWindows = process.platform === 'win32'
   const window = new BrowserWindow({
     width: 1380,
     height: 900,
@@ -192,6 +264,13 @@ function createWindow(): BrowserWindow {
     title: '',
     icon: desktopIconPath(),
     frame: process.platform !== 'darwin',
+    ...(isWindows
+      ? {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: windowsTitleBarOverlay(nativeTheme.shouldUseDarkColors),
+          autoHideMenuBar: true
+        }
+      : {}),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#141416' : '#f8f8f6',
     webPreferences: {
       contextIsolation: true,
@@ -204,14 +283,19 @@ function createWindow(): BrowserWindow {
   if (process.platform === 'darwin') {
     window.setWindowButtonVisibility(true)
     window.setWindowButtonPosition({ x: 12, y: 9 })
+  } else if (isWindows) {
+    window.setMenuBarVisibility(false)
   }
   window.on('page-title-updated', (event) => {
     event.preventDefault()
     window.setTitle('')
   })
+  installPluginRecoveryNavigation(window)
   secureWindow(window)
+  installContextMenu(window, harnessLocale)
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = undefined
+    resolvePluginRecoveryAction('quit')
   })
   mainWindow = window
   return window
@@ -220,12 +304,18 @@ function createWindow(): BrowserWindow {
 async function openHarness(url: string): Promise<void> {
   const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
   if (shouldLoadHarnessUrl(window.webContents.getURL(), url)) {
+    const navigationVersion = ++mainWindowNavigationVersion
+    window.webContents.stop()
     try {
       await window.loadURL(url)
     } catch (error) {
+      if (navigationVersion !== mainWindowNavigationVersion) return
       if (isAbortedNavigationError(error)) return
+      const snapshot = runtime.snapshot()
+      if (snapshot.phase !== 'ready' || snapshot.url !== url) return
       throw error
     }
+    if (navigationVersion !== mainWindowNavigationVersion) return
   }
   if (runtime.snapshot().url !== url || window.isDestroyed()) return
   await syncNativeTheme(window)
@@ -236,8 +326,10 @@ async function openHarness(url: string): Promise<void> {
 
 async function showSplash(): Promise<void> {
   const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
+  const navigationVersion = ++mainWindowNavigationVersion
+  window.webContents.stop()
   await window.loadFile(desktopResourcePath('splash.html'))
-  if (window.isDestroyed()) return
+  if (window.isDestroyed() || navigationVersion !== mainWindowNavigationVersion) return
   window.show()
   window.focus()
 }
@@ -254,6 +346,11 @@ function launchHarness(): Promise<void> {
   return harnessLaunchOperation
 }
 
+function restartHarness(): Promise<void> {
+  if (failureRecoveryVisible) resolvePluginRecoveryAction('restart')
+  return launchHarness()
+}
+
 function registerHarnessHandlers(): void {
   ipcMain.removeHandler('harness:restart')
   ipcMain.handle('harness:restart', async (event) => {
@@ -264,25 +361,149 @@ function registerHarnessHandlers(): void {
       throw new Error('Harness is not ready to restart.')
     }
 
-    await launchHarness()
+    await restartHarness()
     return { ok: runtime.snapshot().phase === 'ready' }
+  })
+
+  ipcMain.removeHandler('desktop-menu:execute')
+  ipcMain.handle('desktop-menu:execute', async (event, command: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    if (!isDesktopMenuCommand(command)) {
+      throw new Error('Unknown DSH Desktop menu command.')
+    }
+    await executeDesktopMenuCommand(command)
+    return { ok: true }
+  })
+
+  ipcMain.removeHandler('desktop-titlebar:set-theme')
+  ipcMain.handle('desktop-titlebar:set-theme', (event, isDark: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    if (typeof isDark !== 'boolean') {
+      throw new Error('The DSH Desktop titlebar theme must be a boolean.')
+    }
+    if (process.platform === 'win32' && mainWindow) {
+      applyWindowChromeTheme(mainWindow, isDark)
+    }
+    return { ok: true }
   })
 }
 
-async function resetHarnessData(): Promise<boolean> {
-  const harnessHome = join(app.getPath('userData'), 'harness')
-  if (!existsSync(harnessHome)) return true
+function assertTrustedMainWindowEvent(event: IpcMainInvokeEvent): void {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame
+  ) {
+    throw new Error('This action is only available from the main DSH Desktop window.')
+  }
+}
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const backupPath = join(app.getPath('userData'), `harness-backup-${timestamp}`)
+async function executeDesktopMenuCommand(command: DesktopMenuCommand): Promise<void> {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  const contents = window.webContents
+
+  switch (command) {
+    case 'connect-phone':
+      await showMobilePairing()
+      break
+    case 'restart-harness':
+      await restartHarness()
+      break
+    case 'show-harness-log':
+      shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+      break
+    case 'check-for-updates':
+      await checkForUpdates(true)
+      break
+    case 'undo':
+      contents.undo()
+      break
+    case 'redo':
+      contents.redo()
+      break
+    case 'cut':
+      contents.cut()
+      break
+    case 'copy':
+      contents.copy()
+      break
+    case 'paste':
+      contents.paste()
+      break
+    case 'select-all':
+      contents.selectAll()
+      break
+    case 'reload':
+      contents.reload()
+      break
+    case 'toggle-devtools':
+      contents.toggleDevTools()
+      break
+    case 'zoom-reset':
+      contents.setZoomLevel(0)
+      break
+    case 'zoom-in':
+      contents.setZoomLevel(Math.min(3, contents.getZoomLevel() + 0.5))
+      break
+    case 'zoom-out':
+      contents.setZoomLevel(Math.max(-3, contents.getZoomLevel() - 0.5))
+      break
+    case 'toggle-fullscreen':
+      window.setFullScreen(!window.isFullScreen())
+      break
+    case 'about':
+      await dialog.showMessageBox(window, {
+        type: 'info',
+        title: 'DSH Desktop',
+        message: `DSH Desktop ${app.getVersion()}`,
+        detail: 'A desktop application for DeepSeek Harness.',
+        buttons: ['OK'],
+        noLink: true
+      })
+      break
+    case 'quit':
+      app.quit()
+      break
+  }
+}
+
+async function waitForPluginRecoveryAction(options: {
+  snapshot: RuntimeSnapshot
+  plugins: readonly string[]
+  removedPlugins: readonly string[]
+  notice?: string
+}): Promise<PluginRecoveryAction> {
+  const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
+  const state = buildPluginRecoveryViewModel({
+    ...options,
+    locale: harnessLocale()
+  })
+  const actionPromise = new Promise<PluginRecoveryAction>((resolve) => {
+    pluginRecoveryActionResolver = resolve
+  })
+  const navigationVersion = ++mainWindowNavigationVersion
+  window.webContents.stop()
 
   try {
-    await rename(harnessHome, backupPath)
-    await mkdir(harnessHome, { recursive: true })
-    return true
-  } catch {
-    return false
+    await window.loadFile(desktopResourcePath('plugin-recovery.html'), {
+      query: {
+        state: JSON.stringify(state),
+        icon: app.isPackaged ? 'icon.png' : 'app-icon.png',
+        theme: harnessThemePreference()
+      }
+    })
+  } catch (error) {
+    pluginRecoveryActionResolver = undefined
+    throw error
   }
+
+  if (window.isDestroyed() || navigationVersion !== mainWindowNavigationVersion) return 'quit'
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+  return actionPromise
 }
 
 function showUnexpectedError(error: unknown): void {
@@ -291,61 +512,57 @@ function showUnexpectedError(error: unknown): void {
 }
 
 async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
-  if (failureDialogVisible || quitting) return
-  failureDialogVisible = true
+  if (failureRecoveryVisible || quitting) return
+  failureRecoveryVisible = true
+
+  const dshHome = join(app.getPath('userData'), 'harness')
+  const isChinese = harnessLocale() === 'zh'
+  const removedPlugins: string[] = []
+  let notice: string | undefined
 
   try {
     while (!quitting && runtime.snapshot().phase === 'failed') {
-      const isChinese = harnessLocale() === 'zh'
-      const options: MessageBoxOptions = {
-        type: 'error',
-        title: isChinese ? 'Harness 无法启动' : 'Harness could not start',
-        message: snapshot.message,
-        detail: snapshot.launchDirectory
-          ? isChinese
-            ? `启动目录: ${snapshot.launchDirectory}\n\n您可以重试、查看日志，或重置 Harness 数据（将备份当前数据）。`
-            : `Launch directory: ${snapshot.launchDirectory}\n\nYou can retry, inspect the log, or reset Harness data (your current data will be backed up).`
-          : isChinese
-            ? '您可以重试、查看日志，或重置 Harness 数据（将备份当前数据）。'
-            : 'You can retry, inspect the log, or reset Harness data (your current data will be backed up).',
-        buttons: isChinese
-          ? ['重试', '查看日志', '重置数据', '退出']
-          : ['Retry', 'Show Log', 'Reset Data', 'Quit'],
-        defaultId: 0,
-        cancelId: 3,
-        noLink: true
-      }
-      const result = mainWindow
-        ? await dialog.showMessageBox(mainWindow, options)
-        : await dialog.showMessageBox(options)
+      snapshot = runtime.snapshot()
+      const offendingPlugins = extractOffendingPlugins(snapshot.logs)
+      const action = await waitForPluginRecoveryAction({
+        snapshot,
+        plugins: offendingPlugins,
+        removedPlugins,
+        notice
+      })
+      notice = undefined
 
-      if (result.response === 0) {
-        await launchHarness()
-      } else if (result.response === 1) {
-        shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
-        continue
-      } else if (result.response === 2) {
-        const resetOk = await resetHarnessData()
-        if (resetOk) {
-          await launchHarness()
-        } else {
-          const fallbackOptions: MessageBoxOptions = {
-            type: 'warning',
-            title: isChinese ? '重置失败' : 'Reset Failed',
-            message: isChinese ? '无法重置 Harness 数据。' : 'Could not reset Harness data.',
-            detail: isChinese
-              ? '请手动删除 Harness 目录后重试。'
-              : 'Try deleting the Harness directory manually, then retry.',
-            buttons: ['OK'],
-            noLink: true
+      if (action === 'uninstall' && offendingPlugins.length > 0) {
+        const failedPlugins: string[] = []
+        for (const plugin of offendingPlugins) {
+          const removed = await uninstallPluginFromProfile(dshHome, plugin)
+          if (removed) {
+            if (!removedPlugins.includes(plugin)) removedPlugins.push(plugin)
+          } else {
+            failedPlugins.push(plugin)
           }
-          mainWindow
-            ? await dialog.showMessageBox(mainWindow, fallbackOptions)
-            : await dialog.showMessageBox(fallbackOptions)
+        }
+
+        if (failedPlugins.length === offendingPlugins.length) {
+          notice = isChinese
+            ? '未能修改插件配置。请打开 Harness 日志查看详情，或选择其他恢复方式。'
+            : 'The plugin profile could not be updated. Open the Harness log for details or choose another recovery option.'
           continue
         }
+        if (failedPlugins.length > 0) {
+          notice = isChinese
+            ? `以下插件未能移除：${failedPlugins.join('、')}`
+            : `These plugins could not be removed: ${failedPlugins.join(', ')}`
+        }
+        await launchHarness()
+      } else if (action === 'restart') {
+        await launchHarness()
+      } else if (action === 'show-log') {
+        shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+        continue
       } else {
         app.quit()
+        return
       }
 
       if (runtime.snapshot().phase !== 'failed') return
@@ -354,7 +571,7 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
   } catch (error) {
     showUnexpectedError(error)
   } finally {
-    failureDialogVisible = false
+    failureRecoveryVisible = false
   }
 }
 
@@ -395,12 +612,12 @@ function installMenu(): void {
         },
         { type: 'separator' },
         {
-          label: 'Restart Harness',
+          label: isChinese ? '重启 Harness' : 'Restart Harness',
           accelerator: 'CmdOrCtrl+Shift+R',
-          click: () => void launchHarness().catch(showUnexpectedError)
+          click: () => void restartHarness().catch(showUnexpectedError)
         },
         {
-          label: 'Show Harness Log',
+          label: isChinese ? '查看 Harness 日志' : 'Show Harness Log',
           click: () => shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
         },
         ...(process.platform === 'darwin'
@@ -446,6 +663,9 @@ function installMenu(): void {
     { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'close' }] }
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+  if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setMenuBarVisibility(false)
+  }
 }
 
 async function showMobilePairing(): Promise<void> {
@@ -550,6 +770,20 @@ async function bootstrap(): Promise<void> {
   })
   ipcMain.handle('mobile:open-pairing', () => showMobilePairing())
   ipcMain.handle('mobile:status', () => ({ connected: mobileBridge.snapshot().connected }))
+  ipcMain.handle('harness:show-log', () => {
+    shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+  })
+  ipcMain.removeHandler('harness:reset-plugins')
+  ipcMain.handle('harness:reset-plugins', async (event, pluginName?: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    if (pluginName !== undefined && typeof pluginName !== 'string') {
+      throw new Error('The failing plugin name must be a string.')
+    }
+    const dshHome = join(app.getPath('userData'), 'harness')
+    await resetPluginProfile(dshHome, pluginName)
+    await launchHarness()
+    return { ok: runtime.snapshot().phase === 'ready' }
+  })
   installMenu()
   await launchHarness()
   if (!developmentBuild) {
