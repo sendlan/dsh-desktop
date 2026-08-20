@@ -365,6 +365,7 @@
 
         <div class="decision-row">
           <div class="actions">
+            <button class="button" id="restart" type="button"></button>
             <button class="button primary" id="primary" type="button"></button>
           </div>
           <p class="safety">
@@ -413,6 +414,7 @@
       setText('reason-detail', model.reasonDetail)
       setText('safety-note', model.safetyNote)
       setText('primary', model.primaryLabel)
+      setText('restart', model.restartLabel)
       setText('advanced-label', model.advancedLabel)
       setText('launch-directory-label', model.launchDirectoryLabel)
       setText('launch-directory', model.launchDirectory || '—')
@@ -450,13 +452,25 @@
       }
 
       const navigate = (action) => {
-        location.href = `dsh-recovery://${action}`
+        if (window.dshRecovery && typeof window.dshRecovery.action === 'function') {
+          void window.dshRecovery.action(action)
+        } else {
+          location.href = `dsh-recovery://${action}`
+        }
       }
       const primary = document.getElementById('primary')
+      const restart = document.getElementById('restart')
       primary.addEventListener('click', () => {
         primary.disabled = true
         primary.textContent = model.primaryBusyLabel
+        restart.disabled = true
         navigate(model.canUninstall ? 'uninstall' : 'show-log')
+      })
+      restart.addEventListener('click', () => {
+        restart.disabled = true
+        restart.textContent = model.restartBusyLabel
+        primary.disabled = true
+        navigate('restart')
       })
       document.getElementById('show-log').addEventListener('click', () => navigate('show-log'))
       document.getElementById('quit').addEventListener('click', () => navigate('quit'))

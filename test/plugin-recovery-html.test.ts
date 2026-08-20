@@ -14,6 +14,7 @@ describe('plugin recovery page', () => {
 
   it('retains access to diagnostics and exit actions', () => {
     expect(html).toContain('class="decision-row"')
+    expect(html).toContain('id="restart"')
     expect(html.indexOf('id="primary"')).toBeLessThan(html.indexOf('id="safety-note"'))
     expect(html).toContain('id="advanced-label"')
     expect(html).toContain('id="show-log"')

@@ -48,16 +48,18 @@ describe('plugin load error detection and extraction', () => {
   })
 })
 
-describe('preload wiring for plugin error toast', () => {
-  it('installs error listeners and exposes restart button', async () => {
+describe('preload wiring for plugin error handling', () => {
+  it('installs error listeners and connects to unified recovery', async () => {
     const preload = await readFile('src/preload/index.ts', 'utf8')
 
-    expect(preload).toContain('dsh-desktop-plugin-error-root')
     expect(preload).toContain("window.addEventListener('error'")
     expect(preload).toContain("window.addEventListener('unhandledrejection'")
     expect(preload).toContain('isPluginLoadError')
-    expect(preload).toContain("harness:restart")
-    expect(preload).toContain("harness:reset-plugins")
-    expect(preload).toContain('mountPluginErrorCard')
+    expect(preload).toContain('harness:open-recovery')
+    expect(preload).toContain('checkBootFailureInDom')
+    expect(preload).toContain('queueBootFailure(errorText)')
+    expect(preload).toContain('pendingBootFailureMessages.join')
+    expect(preload).toContain("document.body?.innerText")
+    expect(preload).toContain("text?.includes('Failed to load plugins')")
   })
 })

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { existsSync, readFileSync } from "node:fs"
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { parse } from 'yaml'
 import {
   app,
@@ -13,12 +13,25 @@ import {
   type IpcMainInvokeEvent,
   type MessageBoxOptions
 } from 'electron'
-import { extractFailureCause, extractOffendingPlugins, HarnessRuntime } from './runtime/harness-runtime'
+import { extractFailureCause, HarnessRuntime } from './runtime/harness-runtime'
+import { removeProfilePluginWithDsh } from './runtime/profile-plugin-command'
 import { LanMobileBridge } from './mobile/lan-mobile-bridge'
+import {
+  detectPluginRecovery,
+  PLUGIN_RECOVERY_EVIDENCE_TIMEOUT_MS
+} from './plugin-recovery-detection'
 import { secureWindow } from './security'
 import { ensureLaunchRoot } from './state/launch-root'
-import { resetPluginProfile, uninstallPluginFromProfile } from './state/plugin-recovery'
-import { isAbortedNavigationError, shouldLoadHarnessUrl } from './window-navigation'
+import {
+  pruneMissingProfileBundles,
+  resetPluginProfile,
+  uninstallPluginFromProfile
+} from './state/plugin-recovery'
+import {
+  desktopHarnessUrl,
+  isAbortedNavigationError,
+  shouldLoadHarnessUrl
+} from './window-navigation'
 import {
   checkForUpdates,
   registerUpdateHandlers,
@@ -34,13 +47,15 @@ import {
   type DesktopMenuCommand
 } from '../shared/desktop-menu'
 import { buildPluginRecoveryViewModel } from './plugin-recovery-view'
+import { aboutDetail, bundledHarnessVersion } from './version-info'
 
-type PluginRecoveryAction = 'uninstall' | 'show-log' | 'quit' | 'restart'
+type PluginRecoveryAction = 'uninstall' | 'show-log' | 'quit' | 'restart' | 'refresh'
 
 const PLUGIN_RECOVERY_ACTIONS = new Set<PluginRecoveryAction>([
   'uninstall',
   'show-log',
-  'quit'
+  'quit',
+  'restart'
 ])
 
 let mainWindow: BrowserWindow | undefined
@@ -53,6 +68,86 @@ let failureRecoveryVisible = false
 let harnessLaunchOperation: Promise<void> | undefined
 let pluginRecoveryActionResolver: ((action: PluginRecoveryAction) => void) | undefined
 let mainWindowNavigationVersion = 0
+let rendererPluginFailureLogs: string[] = []
+let pluginRecoveryRemovedPlugins: string[] = []
+let pluginRecoveryResetTimer: ReturnType<typeof setTimeout> | undefined
+let pendingFrontendPluginRecovery = false
+let pendingFrontendPluginRecoveryMessage: string | undefined
+
+function appendRendererPluginFailureLog(message: string): void {
+  const trimmed = message.trim()
+  if (!trimmed) return
+  const logLine = `[stderr] ${trimmed}`
+  if (rendererPluginFailureLogs.at(-1) === logLine) return
+  rendererPluginFailureLogs.push(logLine)
+  rendererPluginFailureLogs = rendererPluginFailureLogs.slice(-50)
+}
+
+function queuePendingFrontendPluginRecovery(message?: string): void {
+  pendingFrontendPluginRecovery = true
+  if (message) pendingFrontendPluginRecoveryMessage = message
+  resolvePluginRecoveryAction('refresh')
+}
+
+function takePendingFrontendPluginRecovery(): {
+  pending: boolean
+  message?: string
+} {
+  const pending = pendingFrontendPluginRecovery
+  const message = pendingFrontendPluginRecoveryMessage
+  pendingFrontendPluginRecovery = false
+  pendingFrontendPluginRecoveryMessage = undefined
+  return { pending, message }
+}
+
+function cancelPluginRecoverySessionReset(): void {
+  if (pluginRecoveryResetTimer) clearTimeout(pluginRecoveryResetTimer)
+  pluginRecoveryResetTimer = undefined
+}
+
+function schedulePluginRecoverySessionReset(): void {
+  cancelPluginRecoverySessionReset()
+  pluginRecoveryResetTimer = setTimeout(() => {
+    pluginRecoveryResetTimer = undefined
+    pluginRecoveryRemovedPlugins = []
+  // Keep the chain alive long enough for slower Windows machines to finish
+  // rendering a frontend plugin failure after the backend reports ready.
+  }, 60_000)
+}
+
+function appendRendererPluginRecoveryLog(logs: readonly string[]): void {
+  if (logs.length === 0) return
+
+  try {
+    const evidence = logs
+      .slice(-50)
+      .join('\n')
+      .slice(-20_000)
+      .split(/\r?\n/)
+      .map((line) => `[renderer] ${line}`)
+      .join('\n')
+    appendFileSync(
+      join(app.getPath('logs'), 'harness.log'),
+      `\n[desktop] frontend plugin recovery ${new Date().toISOString()}\n${evidence}\n`,
+      'utf8'
+    )
+  } catch (error) {
+    console.warn('[desktop] failed to persist frontend plugin recovery evidence', error)
+  }
+}
+
+function appendPluginRecoveryDetectionLog(plugins: readonly string[]): void {
+  try {
+    const result = plugins.length > 0 ? plugins.join(', ') : 'unresolved'
+    appendFileSync(
+      join(app.getPath('logs'), 'harness.log'),
+      `[desktop] plugin recovery detection: ${result}\n`,
+      'utf8'
+    )
+  } catch (error) {
+    console.warn('[desktop] failed to persist plugin recovery detection', error)
+  }
+}
 
 function isDevelopmentBuild(): boolean {
   if (!app.isPackaged) return true
@@ -162,6 +257,12 @@ function dshEntryPath(): string {
 function bundledNodePath(): string {
   const executable = process.platform === 'win32' ? 'node.exe' : 'node'
   return join(app.getAppPath(), 'node_modules', 'node', 'bin', executable)
+}
+
+function bundledPnpmEntryPath(): string {
+  const root = join(app.getAppPath(), 'node_modules', 'pnpm', 'bin')
+  const candidates = [join(root, 'pnpm.cjs'), join(root, 'pnpm.mjs')]
+  return candidates.find((candidate) => existsSync(candidate)) ?? join(root, 'pnpm.cjs')
 }
 
 function harnessNodeEntryPath(): string {
@@ -290,6 +391,12 @@ function createWindow(): BrowserWindow {
     event.preventDefault()
     window.setTitle('')
   })
+  window.webContents.on('console-message', (details) => {
+    if (details.level !== 'error') return
+    const sourceUrl = details.sourceId || window.webContents.getURL()
+    if (!sourceUrl.startsWith('http://127.0.0.1:')) return
+    appendRendererPluginFailureLog(details.message)
+  })
   installPluginRecoveryNavigation(window)
   secureWindow(window)
   installContextMenu(window, harnessLocale)
@@ -303,11 +410,13 @@ function createWindow(): BrowserWindow {
 
 async function openHarness(url: string): Promise<void> {
   const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
+  const rendererUrl = desktopHarnessUrl(url, process.platform)
   if (shouldLoadHarnessUrl(window.webContents.getURL(), url)) {
     const navigationVersion = ++mainWindowNavigationVersion
+    rendererPluginFailureLogs = []
     window.webContents.stop()
     try {
-      await window.loadURL(url)
+      await window.loadURL(rendererUrl)
     } catch (error) {
       if (navigationVersion !== mainWindowNavigationVersion) return
       if (isAbortedNavigationError(error)) return
@@ -338,6 +447,8 @@ function launchHarness(): Promise<void> {
   if (harnessLaunchOperation) return harnessLaunchOperation
 
   harnessLaunchOperation = (async () => {
+    const dshHome = join(app.getPath('userData'), 'harness')
+    await pruneMissingProfileBundles(dshHome).catch(() => false)
     await showSplash()
     await runtime.start(launchDirectory)
   })().finally(() => {
@@ -399,6 +510,26 @@ function assertTrustedMainWindowEvent(event: IpcMainInvokeEvent): void {
   }
 }
 
+async function showAbout(window: BrowserWindow): Promise<void> {
+  const locale = harnessLocale()
+  const checkForUpdatesLabel = locale === 'zh' ? '检查更新' : 'Check for Updates'
+  const result = await dialog.showMessageBox(window, {
+    type: 'info',
+    title: 'DSH Desktop',
+    message: locale === 'zh' ? '关于 DSH Desktop' : 'About DSH Desktop',
+    detail: aboutDetail(
+      app.getVersion(),
+      bundledHarnessVersion(app.getAppPath()),
+      locale
+    ),
+    buttons: [checkForUpdatesLabel, locale === 'zh' ? '关闭' : 'Close'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true
+  })
+  if (result.response === 0) await checkForUpdates(true)
+}
+
 async function executeDesktopMenuCommand(command: DesktopMenuCommand): Promise<void> {
   const window = mainWindow
   if (!window || window.isDestroyed()) return
@@ -454,14 +585,7 @@ async function executeDesktopMenuCommand(command: DesktopMenuCommand): Promise<v
       window.setFullScreen(!window.isFullScreen())
       break
     case 'about':
-      await dialog.showMessageBox(window, {
-        type: 'info',
-        title: 'DSH Desktop',
-        message: `DSH Desktop ${app.getVersion()}`,
-        detail: 'A desktop application for DeepSeek Harness.',
-        buttons: ['OK'],
-        noLink: true
-      })
+      await showAbout(window)
       break
     case 'quit':
       app.quit()
@@ -511,31 +635,85 @@ function showUnexpectedError(error: unknown): void {
   dialog.showErrorBox('DSH Desktop encountered an error', message)
 }
 
-async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
+async function showPluginRecovery(options?: {
+  message?: string
+  logs?: readonly string[]
+  followRendererLogs?: boolean
+}): Promise<void> {
   if (failureRecoveryVisible || quitting) return
   failureRecoveryVisible = true
 
   const dshHome = join(app.getPath('userData'), 'harness')
   const isChinese = harnessLocale() === 'zh'
-  const removedPlugins: string[] = []
+  cancelPluginRecoverySessionReset()
+  const removedPlugins = pluginRecoveryRemovedPlugins
   let notice: string | undefined
+  let recoveryMessage = options?.message
+  let recoveryLogs = options?.logs
+  let followRendererLogs = options?.followRendererLogs === true
+  let waitForRendererEvidence = followRendererLogs
+
+  const applyPendingFrontendEvidence = (): boolean => {
+    const pending = takePendingFrontendPluginRecovery()
+    if (!pending.pending) return false
+    recoveryMessage = pending.message ?? recoveryMessage
+    recoveryLogs = [...rendererPluginFailureLogs]
+    followRendererLogs = true
+    waitForRendererEvidence = false
+    return true
+  }
 
   try {
-    while (!quitting && runtime.snapshot().phase === 'failed') {
-      snapshot = runtime.snapshot()
-      const offendingPlugins = extractOffendingPlugins(snapshot.logs)
+    while (!quitting) {
+      const snapshot = runtime.snapshot()
+      const message = recoveryMessage ?? snapshot.message
+      const detection = await detectPluginRecovery({
+        dshHome,
+        initialLogs: recoveryLogs ?? snapshot.logs,
+        readLatestLogs: followRendererLogs ? () => rendererPluginFailureLogs : undefined,
+        excludedPlugins: removedPlugins,
+        slotProviderNodeModulesPaths: [join(app.getAppPath(), 'node_modules')],
+        timeoutMs: waitForRendererEvidence ? PLUGIN_RECOVERY_EVIDENCE_TIMEOUT_MS : 0
+      })
+      appendPluginRecoveryDetectionLog(detection.plugins)
+      waitForRendererEvidence = false
+      if (applyPendingFrontendEvidence()) continue
       const action = await waitForPluginRecoveryAction({
-        snapshot,
-        plugins: offendingPlugins,
+        snapshot: {
+          ...snapshot,
+          message: message || snapshot.message,
+          logs: detection.logs
+        },
+        plugins: detection.plugins,
         removedPlugins,
         notice
       })
       notice = undefined
 
-      if (action === 'uninstall' && offendingPlugins.length > 0) {
+      if (action === 'refresh') {
+        applyPendingFrontendEvidence()
+        continue
+      } else if (action === 'uninstall' && detection.plugins.length > 0) {
         const failedPlugins: string[] = []
-        for (const plugin of offendingPlugins) {
-          const removed = await uninstallPluginFromProfile(dshHome, plugin)
+        for (const plugin of detection.plugins) {
+          const removed = await uninstallPluginFromProfile(dshHome, plugin, async (pluginName) => {
+            const result = await removeProfilePluginWithDsh(
+              {
+                dshHome,
+                dshEntryPath: dshEntryPath(),
+                nodeExecutablePath: bundledNodePath(),
+                pnpmEntryPath: bundledPnpmEntryPath(),
+                environment: process.env
+              },
+              pluginName
+            )
+            if (!result.ok) {
+              console.warn(
+                `[plugin-recovery] Failed to remove ${pluginName}: ${result.detail ?? 'unknown error'}`
+              )
+            }
+            return result.ok
+          })
           if (removed) {
             if (!removedPlugins.includes(plugin)) removedPlugins.push(plugin)
           } else {
@@ -543,7 +721,7 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
           }
         }
 
-        if (failedPlugins.length === offendingPlugins.length) {
+        if (failedPlugins.length === detection.plugins.length) {
           notice = isChinese
             ? '未能修改插件配置。请打开 Harness 日志查看详情，或选择其他恢复方式。'
             : 'The plugin profile could not be updated. Open the Harness log for details or choose another recovery option.'
@@ -555,8 +733,20 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
             : `These plugins could not be removed: ${failedPlugins.join(', ')}`
         }
         await launchHarness()
+        if (applyPendingFrontendEvidence()) continue
+        if (runtime.snapshot().phase === 'ready') {
+          schedulePluginRecoverySessionReset()
+          return
+        }
+        continue
       } else if (action === 'restart') {
         await launchHarness()
+        if (applyPendingFrontendEvidence()) continue
+        if (runtime.snapshot().phase === 'ready') {
+          schedulePluginRecoverySessionReset()
+          return
+        }
+        continue
       } else if (action === 'show-log') {
         shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
         continue
@@ -569,7 +759,21 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
     showUnexpectedError(error)
   } finally {
     failureRecoveryVisible = false
+    const pending = takePendingFrontendPluginRecovery()
+    if (pending.pending && !quitting) {
+      queueMicrotask(() => {
+        void showPluginRecovery({
+          message: pending.message,
+          logs: [...rendererPluginFailureLogs],
+          followRendererLogs: true
+        })
+      })
+    }
   }
+}
+
+async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
+  await showPluginRecovery({ message: snapshot.message, logs: snapshot.logs })
 }
 
 function installMenu(): void {
@@ -583,7 +787,14 @@ function installMenu(): void {
           {
             label: app.name,
             submenu: [
-              { role: 'about' as const },
+              {
+                label: isChinese ? '关于 DSH Desktop' : 'About DSH Desktop',
+                click: () => {
+                  if (mainWindow && !mainWindow.isDestroyed()) {
+                    void showAbout(mainWindow).catch(showUnexpectedError)
+                  }
+                }
+              },
               {
                 label: checkForUpdatesLabel,
                 accelerator: 'CmdOrCtrl+U',
@@ -747,8 +958,12 @@ async function bootstrap(): Promise<void> {
       dark: dshBrandLogoPath('dark')
     },
     appIconPath: desktopIconPath(),
-    port: developmentBuild ? 43128 : 43127
+    port: developmentBuild ? 43128 : 43127,
+    onReconnectRequested: () => {
+      void showMobilePairing().catch(showUnexpectedError)
+    }
   })
+  void mobileBridge.start().catch(showUnexpectedError)
   ipcMain.handle('directory-picker:open', async (event) => {
     if (
       !mainWindow ||
@@ -769,6 +984,29 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle('mobile:status', () => ({ connected: mobileBridge.snapshot().connected }))
   ipcMain.handle('harness:show-log', () => {
     shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+  })
+  ipcMain.removeHandler('harness:open-recovery')
+  ipcMain.handle('harness:open-recovery', async (event, frontendErrorMessage?: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    const message = typeof frontendErrorMessage === 'string' ? frontendErrorMessage : undefined
+    if (message) appendRendererPluginFailureLog(message)
+    const logs = [...rendererPluginFailureLogs]
+    appendRendererPluginRecoveryLog(logs)
+    if (failureRecoveryVisible) {
+      queuePendingFrontendPluginRecovery(message)
+      return { ok: true }
+    }
+    void showPluginRecovery({ message, logs, followRendererLogs: true })
+    return { ok: true }
+  })
+  ipcMain.removeHandler('recovery:action')
+  ipcMain.handle('recovery:action', (event, action: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    if (typeof action === 'string' && PLUGIN_RECOVERY_ACTIONS.has(action as PluginRecoveryAction)) {
+      resolvePluginRecoveryAction(action as PluginRecoveryAction)
+      return { ok: true }
+    }
+    return { ok: false }
   })
   ipcMain.removeHandler('harness:reset-plugins')
   ipcMain.handle('harness:reset-plugins', async (event, pluginName?: unknown) => {

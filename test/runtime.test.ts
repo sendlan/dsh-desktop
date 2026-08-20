@@ -3,14 +3,18 @@ import {
   buildHarnessArguments,
   buildHarnessSpawnOptions,
   buildNodeArguments,
+  extractDuplicateLoaderEntryId,
   extractFailureCause,
   extractOffendingPlugin,
   extractOffendingPlugins,
+  extractPluginFailureReferences,
+  extractSlotConflictName,
   formatExitCode,
   updateReadyStability
 } from '../src/main/runtime/harness-runtime'
 import { canGrantWindowPermission, isTrustedAppUrl } from '../src/main/security-policy'
 import {
+  desktopHarnessUrl,
   isAbortedNavigationError,
   shouldLoadHarnessUrl
 } from '../src/main/window-navigation'
@@ -39,11 +43,16 @@ describe('Harness launch contract', () => {
     ])
   })
 
+  it('keeps Harness from handing the loopback URL to the system browser', () => {
+    expect(buildHarnessArguments(43127)).toContain('--no-open')
+  })
+
   it('applies the desktop composition patch before web arguments', () => {
     expect(buildHarnessArguments(43127, 'C:\\app\\dsh-desktop.patch.yml')).toEqual([
       'web',
       '--patch',
       'C:\\app\\dsh-desktop.patch.yml',
+      '--no-open',
       '--host',
       '127.0.0.1',
       '--port',
@@ -91,6 +100,7 @@ describe('Harness launch contract', () => {
       'web',
       '--patch',
       'C:\\app\\dsh-desktop.patch.yml',
+      '--no-open',
       '--host',
       '127.0.0.1',
       '--port',
@@ -220,9 +230,39 @@ describe('offending plugin extraction', () => {
 
   it('ignores core deepseek packages as offending plugins', () => {
     const logs = [
-      '[stderr] [harness-node] DSH entry failed: Error: dsh: plugin tree failed to load: failed to apply loader entry base (@deepseek-ai/dsh-base): some error'
+      '[stderr] [harness-node] DSH entry failed: Error: dsh: plugin tree failed to load: failed to apply loader entry picker (@deepseek-ai/dsh-client-ui-directory-picker-native): some error'
     ]
     expect(extractOffendingPlugin(logs)).toBeUndefined()
+  })
+
+  it('extracts only third-party packages from the frontend boot failure list', () => {
+    const logs = [
+      '[stderr] Failed to load plugins\n@deepseek-ai/dsh-client-ui-directory-picker-native\ndsh-remote\nweb boot: 2 entries did not activate'
+    ]
+    expect(extractOffendingPlugins(logs)).toEqual(['dsh-remote'])
+    expect(extractPluginFailureReferences(logs)).toEqual([
+      '@deepseek-ai/dsh-client-ui-directory-picker-native',
+      'dsh-remote'
+    ])
+  })
+
+  it('keeps a failed core entry as ownership evidence without making it uninstallable', () => {
+    const logs = [
+      '[stderr] failed to apply loader entry 43d01328 (@deepseek-ai/dsh-client-ui-directory-picker-browse): single slot "conversation.hero.workspace.directoryFlow" already has a registration at priority 0'
+    ]
+    expect(extractPluginFailureReferences(logs)).toEqual([
+      '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+    ])
+    expect(extractOffendingPlugins(logs)).toEqual([])
+  })
+
+  it('extracts a generic renderer slot conflict without registration identities', () => {
+    const logs = [
+      '[stderr] UI slot "conversation.hero.workspace.directoryFlow" has duplicate registrations from conflicting plugins.'
+    ]
+    expect(extractSlotConflictName(logs)).toBe(
+      'conversation.hero.workspace.directoryFlow'
+    )
   })
 
   it('returns undefined when no plugin error is matched', () => {
@@ -230,6 +270,14 @@ describe('offending plugin extraction', () => {
       '[stderr] [harness-node] uncaught exception: ReferenceError: x is not defined'
     ]
     expect(extractOffendingPlugin(logs)).toBeUndefined()
+  })
+
+  it('never treats an internal Cordis loader as an uninstallable plugin', () => {
+    const logs = [
+      '[stderr] [harness-node] DSH entry failed: Error: dsh: plugin tree failed to load: failed to apply loader entry include (cordis:include): duplicate loader entry id: storage'
+    ]
+    expect(extractOffendingPlugins(logs)).toEqual([])
+    expect(extractDuplicateLoaderEntryId(logs)).toBe('storage')
   })
 
   it('collects multiple unique plugins reported by the same launch', () => {
@@ -305,6 +353,18 @@ describe('navigation trust boundary', () => {
 })
 
 describe('Harness window activation', () => {
+  it('stamps Windows renderer URLs so plugins can avoid the native titlebar overlay', () => {
+    expect(desktopHarnessUrl('http://127.0.0.1:43127', 'win32')).toBe(
+      'http://127.0.0.1:43127/?dsh-desktop-mode=advanced&dsh-desktop-platform=win32'
+    )
+    expect(desktopHarnessUrl('http://127.0.0.1:43127/?workspace=demo', 'win32')).toBe(
+      'http://127.0.0.1:43127/?workspace=demo&dsh-desktop-mode=advanced&dsh-desktop-platform=win32'
+    )
+    expect(desktopHarnessUrl('http://127.0.0.1:43127', 'darwin')).toBe(
+      'http://127.0.0.1:43127'
+    )
+  })
+
   it('preserves the current page when the existing Harness instance is focused again', () => {
     expect(
       shouldLoadHarnessUrl(

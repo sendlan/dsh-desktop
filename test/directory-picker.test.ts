@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
+import { patchPath } from './patch-path'
 
 describe('desktop Electron directory picker', () => {
   it('exposes a narrow preload bridge and handles it in the main process', async () => {
@@ -34,7 +35,7 @@ describe('desktop Electron directory picker', () => {
 
   it('captures the client bridge as a reproducible dependency patch', async () => {
     const dependencyPatch = await readFile(
-      'patches/@deepseek-ai+dsh-client-ui-directory-picker-native+0.1.0-rc.7.patch',
+      patchPath('@deepseek-ai/dsh-client-ui-directory-picker-native'),
       'utf8'
     )
 
@@ -44,7 +45,7 @@ describe('desktop Electron directory picker', () => {
 
   it('keeps the Host API proxy active when the legacy picker service is absent', async () => {
     const apiProxyPatch = await readFile(
-      'patches/@deepseek-ai+dsh-host-apiproxy+0.1.0-rc.7.patch',
+      patchPath('@deepseek-ai/dsh-host-apiproxy'),
       'utf8'
     )
 

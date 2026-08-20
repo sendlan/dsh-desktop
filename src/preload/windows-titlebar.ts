@@ -7,6 +7,7 @@ import {
 const HOST_ID = 'dsh-desktop-windows-titlebar'
 const LAYOUT_STYLE_ID = `${HOST_ID}-layout`
 const SIDEBAR_WIDTH_PROPERTY = '--dsh-desktop-windows-sidebar-width'
+const CAPTION_WIDTH_PROPERTY = '--dsh-desktop-windows-caption-width'
 
 type MenuEntry =
   | { kind: 'command'; command: DesktopMenuCommand; label: string; shortcut?: string }
@@ -117,6 +118,7 @@ function installLayout(document: Document): void {
   style.textContent = `
     html, body { height: 100% !important; }
     body.dsh-desktop-windows-titlebar-layout {
+      ${CAPTION_WIDTH_PROPERTY}: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 140px)));
       box-sizing: border-box !important;
       height: 100% !important;
       padding-top: 0 !important;
@@ -127,6 +129,9 @@ function installLayout(document: Document): void {
     }
     body.dsh-desktop-windows-titlebar-layout [data-dsh-sidebar-root][data-dsh-sidebar-wide="true"] {
       padding-top: 6px !important;
+    }
+    body.dsh-desktop-windows-titlebar-layout [data-slot="conversation.session.header"] > header {
+      padding-right: calc(var(${CAPTION_WIDTH_PROPERTY}, 140px) + 52px) !important;
     }
   `
   document.head.appendChild(style)

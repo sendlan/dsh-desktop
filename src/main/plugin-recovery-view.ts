@@ -17,6 +17,8 @@ export interface PluginRecoveryViewModel {
   safetyNote: string
   primaryLabel: string
   primaryBusyLabel: string
+  restartLabel: string
+  restartBusyLabel: string
   logLabel: string
   advancedLabel: string
   errorLabel: string
@@ -30,6 +32,11 @@ export interface PluginRecoveryViewModel {
 interface FailureDescription {
   title: string
   detail: string
+}
+
+function displayPluginName(packageName: string): string {
+  if (!packageName.startsWith('@')) return packageName
+  return packageName.slice(packageName.indexOf('/') + 1)
 }
 
 function latestAttemptText(logs: readonly string[]): string {
@@ -62,6 +69,19 @@ export function describePluginFailure(
         }
   }
 
+  if (/duplicate loader entry id/i.test(text)) {
+    const entryId = text.match(/duplicate loader entry id:\s*([^\s]+)/i)?.[1]
+    return locale === 'zh'
+      ? {
+          title: '插件注册了重复的服务组件',
+          detail: `启动日志显示组件 ${entryId ? `"${entryId}"` : ''} 被重复定义，插件之间存在加载冲突，因此 Harness 无法继续启动。`
+        }
+      : {
+          title: 'A plugin registered a duplicate service component',
+          detail: `The startup log shows that component ${entryId ? `"${entryId}"` : ''} was registered more than once due to a plugin conflict.`
+        }
+  }
+
   if (/cannot resolve profile bundle/i.test(text)) {
     return locale === 'zh'
       ? {
@@ -83,6 +103,19 @@ export function describePluginFailure(
       : {
           title: 'The package is not a compatible DSH plugin',
           detail: 'It does not declare the entry point required by Harness.'
+        }
+  }
+
+  if (/single slot\s+["'][^"']+["']\s+already has a registration/i.test(text)) {
+    const slotName = text.match(/single slot\s+["']([^"']+)["']/i)?.[1]
+    return locale === 'zh'
+      ? {
+          title: '插件存在界面插槽冲突',
+          detail: `检测到界面插槽 ${slotName ? `"${slotName}"` : ''} 存在重复注册，多个第三方插件试图占用相同的界面组件，导致前端无法正常渲染。`
+        }
+      : {
+          title: 'A plugin has a UI slot conflict',
+          detail: `UI slot ${slotName ? `"${slotName}"` : ''} has duplicate registrations from conflicting plugins.`
         }
   }
 
@@ -117,8 +150,9 @@ export function buildPluginRecoveryViewModel(options: {
   notice?: string
 }): PluginRecoveryViewModel {
   const { snapshot, locale, notice } = options
-  const plugins = [...new Set(options.plugins)]
-  const removedPlugins = [...new Set(options.removedPlugins)]
+  const pluginPackages = [...new Set(options.plugins)]
+  const plugins = pluginPackages.map(displayPluginName)
+  const removedPlugins = [...new Set(options.removedPlugins)].map(displayPluginName)
   const canUninstall = plugins.length > 0
   const description = describePluginFailure(snapshot.logs, locale)
   const multiple = plugins.length > 1
@@ -147,6 +181,8 @@ export function buildPluginRecoveryViewModel(options: {
         ? multiple ? `卸载这 ${plugins.length} 个插件并继续检测` : '卸载此插件并继续检测'
         : '打开 Harness 日志',
       primaryBusyLabel: canUninstall ? '正在处理并重新检测…' : '正在打开日志…',
+      restartLabel: '重启 Harness',
+      restartBusyLabel: '正在重启…',
       logLabel: '打开 Harness 日志',
       advancedLabel: '查看技术详情',
       errorLabel: '错误信息',
@@ -181,6 +217,8 @@ export function buildPluginRecoveryViewModel(options: {
       ? multiple ? `Remove these ${plugins.length} plugins and continue` : 'Remove this plugin and continue'
       : 'Open Harness log',
     primaryBusyLabel: canUninstall ? 'Removing and checking again…' : 'Opening log…',
+    restartLabel: 'Restart Harness',
+    restartBusyLabel: 'Restarting…',
     logLabel: 'Open Harness log',
     advancedLabel: 'View technical details',
     errorLabel: 'Error details',

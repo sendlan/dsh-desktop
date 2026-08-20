@@ -6,26 +6,15 @@ import {
   updateMessage,
   type UpdateLocale
 } from './update-view'
-import {
-  isPluginLoadError,
-  extractPluginName,
-  pluginErrorMessage
-} from './plugin-error-view'
+import { isPluginLoadError } from './plugin-error-view'
 import { mountWindowsTitlebar } from './windows-titlebar'
 
 const ROOT_ID = 'dsh-desktop-update-root'
-const PLUGIN_ERROR_ROOT_ID = 'dsh-desktop-plugin-error-root'
 const MOBILE_BUTTON_ID = 'dsh-desktop-mobile-button'
 const locale: UpdateLocale = navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 
 let host: HTMLDivElement | undefined
 let content: HTMLDivElement | undefined
-let pluginErrorHost: HTMLDivElement | undefined
-let pluginErrorContent: HTMLDivElement | undefined
-let activePluginErrorName: string | undefined
-let pluginErrorVisible = false
-let restartingHarness = false
-let resettingHarness = false
 let currentStatus: UpdateStatus | undefined
 let dismissedVersion: string | null = null
 let dismissedTransientPhase: UpdateStatus['phase'] | null = null
@@ -33,53 +22,63 @@ let installing = false
 let receivedStatusEvent = false
 let phoneConnected = false
 let mobileStatusTimer: number | undefined
+let bootFailureTriggered = false
+let bootFailureTimer: number | undefined
+const pendingBootFailureMessages: string[] = []
+
+const BOOT_FAILURE_SETTLE_MS = 400
+
+function currentBootFailureText(): string | undefined {
+  const root = document.body || document.documentElement
+  if (!root) return undefined
+
+  // The package list and loader detail are rendered in separate sibling
+  // containers on Harness's boot-failure page. Reading only the title's
+  // parent drops exactly the evidence Desktop needs to identify the second
+  // conflicting plugin, so capture the full failure page instead.
+  const text = document.body?.innerText || root.textContent
+  if (!text?.includes('Failed to load plugins')) return undefined
+  return text
+    ?.split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
+function addBootFailureMessage(message: string | undefined): void {
+  const normalized = message?.trim()
+  if (!normalized || pendingBootFailureMessages.includes(normalized)) return
+  pendingBootFailureMessages.push(normalized)
+}
+
+function queueBootFailure(message?: string): void {
+  if (bootFailureTriggered) return
+
+  addBootFailureMessage(message)
+  addBootFailureMessage(currentBootFailureText())
+  if (pendingBootFailureMessages.length === 0) return
+
+  if (bootFailureTimer !== undefined) window.clearTimeout(bootFailureTimer)
+  bootFailureTimer = window.setTimeout(() => {
+    bootFailureTimer = undefined
+    if (bootFailureTriggered) return
+
+    // The web boot page renders the plugin name and detailed loader error after
+    // window.error/unhandledrejection fires. Read it one last time before leaving
+    // the page so recovery receives the richest available diagnostic evidence.
+    addBootFailureMessage(currentBootFailureText())
+    const errorText = pendingBootFailureMessages.join('\n')
+    if (!errorText) return
+
+    bootFailureTriggered = true
+    void ipcRenderer.invoke('harness:open-recovery', errorText)
+  }, BOOT_FAILURE_SETTLE_MS)
+}
 
 function checkBootFailureInDom(): void {
-  const root = document.body || document.documentElement
-  if (!root) return
-  const divs = Array.from(root.querySelectorAll('div'))
-  const failedTitle = divs.find((el) => el.textContent?.trim() === 'Failed to load plugins')
-  if (!failedTitle || !failedTitle.parentElement) return
-
-  const failedContainer = failedTitle.parentElement
-  const errorText = failedContainer.textContent ?? ''
-  const pluginName = extractPluginName(errorText)
-
-  const INJECTED_ID = 'dsh-desktop-boot-recovery-actions'
-  if (document.getElementById(INJECTED_ID)) return
-
-  const actionsDiv = document.createElement('div')
-  actionsDiv.id = INJECTED_ID
-  actionsDiv.style.cssText = [
-    'display:flex',
-    'margin-top:20px',
-    'justify-content:center',
-    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif'
-  ].join(';')
-
-  const restartBtn = document.createElement('button')
-  restartBtn.type = 'button'
-  restartBtn.textContent = locale === 'zh' ? '重启 Harness' : 'Restart Harness'
-  restartBtn.style.cssText = [
-    'appearance:none',
-    'border:none',
-    'background:#4d6bfe',
-    'color:#ffffff',
-    'padding:9px 22px',
-    'border-radius:8px',
-    'font-size:13px',
-    'font-weight:600',
-    'cursor:pointer',
-    'box-shadow:0 2px 8px rgba(77,107,254,0.35)'
-  ].join(';')
-  restartBtn.addEventListener('click', () => {
-    restartBtn.disabled = true
-    restartBtn.textContent = locale === 'zh' ? '正在重启…' : 'Restarting…'
-    void ipcRenderer.invoke('harness:reset-plugins', pluginName)
-  })
-
-  actionsDiv.appendChild(restartBtn)
-  failedContainer.appendChild(actionsDiv)
+  const errorText = currentBootFailureText()
+  if (!errorText) return
+  queueBootFailure(errorText)
 }
 
 const domObserver = new MutationObserver(() => {
@@ -99,8 +98,8 @@ function mountMobileButton(): void {
     style.textContent = mobileButtonStyles
     document.head.appendChild(style)
   }
-  const footer = document.querySelector<HTMLElement>('[data-dsh-sidebar-footer]')
-  if (!footer) return
+  const settingsArea = document.querySelector<HTMLElement>('[data-dsh-sidebar-settings]')
+  if (!settingsArea) return
   let button = document.getElementById(MOBILE_BUTTON_ID) as HTMLButtonElement | null
   if (!button) {
     button = document.createElement('button')
@@ -113,7 +112,7 @@ function mountMobileButton(): void {
       })
     })
   }
-  if (button.parentElement !== footer) footer.appendChild(button)
+  if (button.parentElement !== settingsArea) settingsArea.appendChild(button)
   renderMobileButton()
 }
 
@@ -146,7 +145,6 @@ function initializeUi(): void {
     mountWindowsTitlebar({ document, ipcRenderer, locale })
   }
   mount()
-  mountPluginErrorCard()
   mountMobileButton()
   checkBootFailureInDom()
   domObserver.observe(document.documentElement, {
@@ -160,14 +158,16 @@ function initializeUi(): void {
 window.addEventListener('error', (event) => {
   const err = event.error ?? event.message
   if (isPluginLoadError(err)) {
-    showPluginErrorNotification(extractPluginName(err))
+    const errorText = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err)
+    queueBootFailure(errorText)
   }
 })
 
 window.addEventListener('unhandledrejection', (event) => {
   const reason = event.reason
   if (isPluginLoadError(reason)) {
-    showPluginErrorNotification(extractPluginName(reason))
+    const errorText = typeof reason === 'string' ? reason : reason instanceof Error ? reason.message : String(reason)
+    queueBootFailure(errorText)
   }
 })
 
@@ -178,114 +178,12 @@ contextBridge.exposeInMainWorld(
   })
 )
 
-function mountPluginErrorCard(): void {
-  if (document.getElementById(PLUGIN_ERROR_ROOT_ID)) return
-
-  pluginErrorHost = document.createElement('div')
-  pluginErrorHost.id = PLUGIN_ERROR_ROOT_ID
-  pluginErrorHost.style.cssText = [
-    'position:fixed',
-    'right:20px',
-    'bottom:20px',
-    'z-index:2147483647',
-    'display:none',
-    'width:min(384px,calc(100vw - 40px))',
-    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif'
-  ].join(';')
-
-  const shadow = pluginErrorHost.attachShadow({ mode: 'closed' })
-  const style = document.createElement('style')
-  style.textContent = styles
-  pluginErrorContent = document.createElement('div')
-  shadow.append(style, pluginErrorContent)
-  document.documentElement.appendChild(pluginErrorHost)
-  renderPluginError()
-}
-
-function showPluginErrorNotification(pluginName?: string): void {
-  activePluginErrorName = pluginName || activePluginErrorName
-  pluginErrorVisible = true
-  mountPluginErrorCard()
-  renderPluginError()
-}
-
-function dismissPluginError(): void {
-  pluginErrorVisible = false
-  if (pluginErrorHost) {
-    pluginErrorHost.style.display = 'none'
-  }
-}
-
-function renderPluginError(): void {
-  if (!pluginErrorHost || !pluginErrorContent) return
-
-  if (!pluginErrorVisible) {
-    pluginErrorHost.style.display = 'none'
-    pluginErrorContent.replaceChildren()
-    return
-  }
-
-  pluginErrorHost.style.display = 'block'
-  const info = pluginErrorMessage(locale, activePluginErrorName)
-
-  const card = element('aside', 'card')
-  card.setAttribute('aria-live', 'polite')
-  card.setAttribute('aria-label', info.title)
-
-  const row = element('div', 'row')
-  const indicator = element('span', restartingHarness || resettingHarness ? 'spinner' : 'dot warning')
-  indicator.setAttribute('aria-hidden', 'true')
-  row.appendChild(indicator)
-
-  const body = element('div', 'body')
-  const title = element('p', 'message')
-  title.textContent = info.title
-  body.appendChild(title)
-
-  const detail = element('p', 'detail')
-  detail.textContent = info.message
-  body.appendChild(detail)
-
-  const actions = element('div', 'actions')
-  const restartBtn = button(
-    restartingHarness
-      ? locale === 'zh'
-        ? '正在重启…'
-        : 'Restarting…'
-      : locale === 'zh'
-        ? '重启 Harness'
-        : 'Restart Harness',
-    'primary'
-  )
-  restartBtn.disabled = restartingHarness
-  restartBtn.addEventListener('click', () => {
-    restartingHarness = true
-    renderPluginError()
-    void ipcRenderer
-      .invoke('harness:reset-plugins', activePluginErrorName)
-      .finally(() => {
-        restartingHarness = false
-        dismissPluginError()
-      })
+contextBridge.exposeInMainWorld(
+  'dshRecovery',
+  Object.freeze({
+    action: (action: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('recovery:action', action)
   })
-
-  const ignoreBtn = button(locale === 'zh' ? '忽略' : 'Dismiss', 'secondary')
-  ignoreBtn.disabled = restartingHarness
-  ignoreBtn.addEventListener('click', dismissPluginError)
-
-  actions.append(restartBtn, ignoreBtn)
-  body.appendChild(actions)
-
-  row.appendChild(body)
-
-  const close = button('×', 'close')
-  close.setAttribute('aria-label', locale === 'zh' ? '关闭' : 'Close')
-  close.addEventListener('click', dismissPluginError)
-  row.appendChild(close)
-
-  card.appendChild(row)
-  pluginErrorContent.replaceChildren(card)
-}
+)
 
 function mount(): void {
   if (document.getElementById(ROOT_ID)) return
@@ -555,11 +453,12 @@ const styles = `
 const phoneIcon = `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true"><rect x="7" y="2.75" width="10" height="18.5" rx="2.25" stroke="currentColor" stroke-width="1.7"/><path d="M10.2 5.5h3.6M10.5 18.35h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`
 
 const mobileButtonStyles = `
-  [data-dsh-sidebar-footer] { position: relative; }
-  [data-dsh-sidebar-root][data-dsh-sidebar-wide="true"] [data-dsh-sidebar-footer] > [class*="settingsArea"] { padding-right: 38px; }
+  [data-dsh-sidebar-settings] { position:relative; box-sizing:border-box; }
+  [data-dsh-sidebar-root][data-dsh-sidebar-wide="true"] [data-dsh-sidebar-settings] { padding-right:38px; }
   #${MOBILE_BUTTON_ID} { appearance:none; position:relative; width:32px; height:32px; color:var(--dsw-alias-label-secondary,#73777f); background:transparent; border:0; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; }
   [data-dsh-sidebar-root][data-dsh-sidebar-wide="true"] #${MOBILE_BUTTON_ID} { position:absolute; right:0; top:50%; transform:translateY(-50%); }
-  [data-dsh-sidebar-root][data-dsh-sidebar-wide="false"] #${MOBILE_BUTTON_ID} { margin-top:5px; }
+  [data-dsh-sidebar-root][data-dsh-sidebar-wide="false"] [data-dsh-sidebar-settings] { flex-direction:column; align-items:center; }
+  [data-dsh-sidebar-root][data-dsh-sidebar-wide="false"] #${MOBILE_BUTTON_ID} { flex:none; margin-top:5px; }
   #${MOBILE_BUTTON_ID}:hover { color:var(--dsw-alias-label-primary,#202124); background:var(--dsw-alias-interactive-bg-hover,rgba(32,33,36,.08)); }
   #${MOBILE_BUTTON_ID}:focus-visible { outline:2px solid #4d6bfe; outline-offset:1px; }
   #${MOBILE_BUTTON_ID}[hidden] { display:none; }
