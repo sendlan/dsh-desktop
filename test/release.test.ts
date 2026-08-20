@@ -233,32 +233,10 @@ describe('GitHub release contract', () => {
     expect(workflow).not.toContain('npm version')
   })
 
-  it('syncs upstream into the fork only, opening a PR when a merge conflicts', async () => {
-    const workflow = await readFile(
-      path.join(projectRoot, '.github', 'workflows', 'sync-upstream.yml'),
-      'utf8'
-    )
-
-    // main mirrors upstream; loong64 merges OUR main, auto-resolving
-    // conflicts by keeping loong64's version (-X ours).
-    expect(workflow).toContain('git merge-base --is-ancestor upstream/main')
-    expect(workflow).toContain('git merge --no-edit upstream/main')
-    expect(workflow).toContain('git merge --no-edit -X ours origin/main')
-    expect(workflow).toContain('needs: sync-main')
-    expect(workflow).toContain('git merge --abort')
-    expect(workflow).toContain('gh pr create')
-    expect(workflow).toContain('pull-requests: write')
-    // Pushing workflow-file changes requires SSH (deploy key) — the
-    // GITHUB_TOKEN has no 'workflows' permission.
-    expect(workflow).not.toContain('workflows: write')
-    expect(workflow).toContain('ref: main')
-    expect(workflow).toContain('ref: loong64')
-    // Pushes only touch the fork's own branches (via the SSH deploy key);
-    // upstream is never modified.
-    expect(workflow).toContain('ssh_push loong64')
-    expect(workflow).toContain('ssh_push main')
-    expect(workflow).not.toContain('git push upstream')
-    expect(workflow).not.toContain('git push dataelement')
+  it('keeps host-side synchronization out of GitHub Actions', async () => {
+    await expect(
+      readFile(path.join(projectRoot, '.github', 'workflows', 'sync-upstream.yml'), 'utf8')
+    ).rejects.toThrow()
   })
 
   it('routes the published download through the official website', async () => {
