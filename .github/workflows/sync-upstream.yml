@@ -1,0 +1,57 @@
+name: Sync upstream release
+
+on:
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check upstream
+    runs-on: ubuntu-24.04
+    outputs:
+      new_version: ${{ steps.compare.outputs.new_version }}
+      upstream_tag: ${{ steps.compare.outputs.upstream_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - id: compare
+        run: |
+          upstream_tag=$(gh api repos/dataelement/dsh-desktop/releases/latest --jq '.tag_name')
+          echo "upstream_tag=$upstream_tag" >> "$GITHUB_OUTPUT"
+          if git rev-parse "refs/tags/$upstream_tag" >/dev/null 2>&1; then
+            echo "new_version=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_version=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  create-tag:
+    name: Create release tag
+    needs: check
+    if: needs.check.outputs.new_version == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Merge upstream and create tag
+        run: |
+          tag="${{ needs.check.outputs.upstream_tag }}"
+          git remote add upstream https://github.com/dataelement/dsh-desktop.git || true
+          git fetch upstream --tags
+          git checkout -B main upstream/main
+          git push origin main
+          git tag "$tag"
+          git push origin "$tag"

@@ -39,7 +39,9 @@
     "package:mac": "npm run build && electron-builder --mac --publish never",
     "package:mac:arm64": "node scripts/verify-target.mjs darwin arm64 && npm run build && electron-builder --mac --arm64 --publish never",
     "package:mac:x64": "node scripts/verify-target.mjs darwin x64 && npm run build && electron-builder --mac --x64 --publish never",
-    "package:win": "node scripts/verify-target.mjs win32 x64 && npm run build && electron-builder --win --x64 --publish never"
+    "package:win": "node scripts/verify-target.mjs win32 x64 && npm run build && electron-builder --win --x64 --publish never",
+    "package:linux:x64": "node scripts/verify-target.mjs linux x64 && npm run build && electron-builder --linux --x64 --publish never",
+    "package:linux:arm64": "node scripts/verify-target.mjs linux arm64 && npm run build && electron-builder --linux --arm64 --publish never"
   },
   "dependencies": {
     "@deepseek-ai/cordis-plugin-group": "1.0.1",
@@ -175,6 +177,18 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "linux": {
+      "maintainer": "sendlan <sendlan@outlook.com>",
+      "icon": "build/app-icon.png",
+      "target": [
+        {
+          "target": "deb"
+        },
+        {
+          "target": "AppImage"
+        }
+      ]
     }
   }
 }
