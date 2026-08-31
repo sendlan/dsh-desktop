@@ -49,6 +49,17 @@ describe('LAN mobile page', () => {
     expect(html).toContain("if(history.state?.view==='chat')history.back()")
     expect(html).toContain("function showSessionList()")
     expect(html).toContain("function handleHistory(state)")
+    expect(html).toContain("function recentSession()")
+    expect(html).toContain("await openRecentSession()")
+    expect(html).toContain("new EventSource('/api/session/stream?sessionId='")
+    expect(html).toContain("source.addEventListener('snapshot'")
+    expect(html).toContain("source.addEventListener('event'")
+    expect(html).toContain('requestAnimationFrame(()=>flushStreamRender(sessionId))')
+    expect(html).toContain('function patchLastStreamMessage(messages)')
+    expect(html).toContain("queueStreamRender(sessionId,type!=='assistant/chunk')")
+    expect(html).toContain("if(type!=='assistant/chunk')schedulePendingSync(sessionId)")
+    expect(html).not.toContain("applyHistory({events:streamEvents,projections:streamProjections},pendingQuestion,false);void rpc('interaction.pending'")
+    expect(html.indexOf('openSessionStream(id);await loadHistory(true)')).toBeGreaterThan(-1)
     expect(html).toContain('id="questionComposer" class="question-composer" hidden')
     expect(html).toContain("rpc('interaction.pending',{sessionId})")
     expect(html).toContain("rpc('interaction.answer',{rpcId:current.rpcId")
@@ -85,7 +96,15 @@ describe('LAN mobile page', () => {
     expect(html).toContain('targetCount:nextOptimisticTarget(text)')
     expect(html).toContain("optimisticPrompts=optimisticPrompts.filter(item=>(counts.get(item.text)||0)<item.targetCount)")
     expect(html).toContain('class=\"skeleton\"')
-    expect(html).toContain('agentRunning||pendingQuestion?250:750')
+    expect(html).toContain(
+      'const delay=streamConnected?HISTORY_POLL_IDLE_CAP_MS:agentRunning||pendingQuestion?HISTORY_POLL_ACTIVE_MS:idlePollMs'
+    )
+    expect(html).toContain('HISTORY_POLL_ACTIVE_MS=250,HISTORY_POLL_IDLE_MS=750')
+    // An idle chat left open must not keep refetching the whole history forever.
+    expect(html).toContain('if(!activeSession||document.hidden)return')
+    expect(html).toContain(
+      'idlePollMs=Math.min(Math.round(idlePollMs*1.5),HISTORY_POLL_IDLE_CAP_MS)'
+    )
     expect(html).toContain("t==='user/message'")
     expect(html).toContain("message.source?.kind==='user'")
     expect(html).toContain("t==='assistant/message'")
@@ -103,7 +122,7 @@ describe('LAN mobile page', () => {
     expect(html).not.toContain("(streaming?' open':'')")
     expect(html).toContain('class="thinking" data-state="\'+state+\'"')
     expect(html).toContain(
-      'key=JSON.stringify([messages,pending?.rpcId||null,agentRunning,currentTodos,todoExpanded])'
+      'key=JSON.stringify([messages,pendingQuestion?.rpcId||null,agentRunning,currentTodos,todoExpanded])'
     )
     expect(html).toContain('class=\"tool\" data-state=')
     expect(html).toContain('class=\"activity-leading\"')
@@ -435,5 +454,45 @@ describe('LAN mobile page', () => {
       'onclick="switchMode(true)" disabled>Internet Connection Mode</button>'
     )
     expect(desktop).toContain('.mode-btn:disabled{cursor:not-allowed;opacity:.5}')
+  })
+})
+describe('desktop pairing page QR expiry self-healing', () => {
+  it('reloads the page when the pairing countdown reaches zero and no phone is connected', () => {
+    const html = renderDesktopPairingPage({
+      qrSvg: '<svg></svg>',
+      pairingUrl: 'http://192.168.1.4:39871/pair?token=abc123',
+      expiresAt: Date.now() + 60_000,
+      locale: 'en',
+      connected: false,
+      tunnelActive: false,
+      tunnelLoading: false,
+      tunnelUrl: undefined,
+      tunnelError: undefined
+    })
+    const countdown = /setInterval\(\(\)=>\{const n=[\s\S]*?\},1000\)/.exec(html)?.[0]
+    expect(countdown).toBeTruthy()
+    expect(countdown).toContain('T.expired')
+    expect(countdown).toContain('location.reload()')
+    expect(countdown).toContain('phoneConnected')
+    expect(countdown).toContain('pendingId')
+    expect(countdown).toContain('modeSwitching')
+  })
+})
+
+describe('desktop pairing page expiry copy', () => {
+  it('describes automatic refresh instead of asking the user to reopen the window', () => {
+    const html = renderDesktopPairingPage({
+      qrSvg: '<svg></svg>',
+      pairingUrl: 'http://192.168.1.4:39871/pair?token=abc123',
+      expiresAt: Date.now() + 60_000,
+      locale: 'en',
+      connected: false,
+      tunnelActive: false,
+      tunnelLoading: false,
+      tunnelUrl: undefined,
+      tunnelError: undefined
+    })
+    expect(html).toContain('QR expired. Refreshing automatically')
+    expect(html).not.toContain('Reopen this window')
   })
 })

@@ -155,6 +155,30 @@ function parseEnvOutput(output: string, lineSeparator: RegExp): NodeJS.ProcessEn
   return env
 }
 
+/**
+ * The process launch token from the Harness URL line.
+ *
+ * Since 0.1.2-alpha.1 the Host authenticates the whole API before dispatch:
+ * `dsh-web-app` prints one root URL carrying a per-process token, and only
+ * `GET /?token=...` exchanges it for the signed, authority-bound session
+ * cookie. API paths and Authorization headers do not accept the token, so
+ * every desktop-side consumer — the window and the mobile bridge alike —
+ * has to start from this line.
+ *
+ * @param line - one line of Harness stdout.
+ * @returns the token, or undefined when the line is not the URL line.
+ */
+export function extractLaunchToken(line: string): string | undefined {
+  const match = /\bdsh web:\s*(\S+)/u.exec(line)
+  if (!match?.[1]) return undefined
+  try {
+    const token = new URL(match[1]).searchParams.get('token')
+    return token === null || token === '' ? undefined : token
+  } catch {
+    return undefined
+  }
+}
+
 export function buildHarnessArguments(
   port: number,
   patchPath?: string,
@@ -173,6 +197,37 @@ export function buildHarnessArguments(
   ]
 }
 
+/**
+ * The captured PATH, looked up the way Windows actually stores it.
+ *
+ * `resolveShellEnvironment()` returns a plain object built by `parseEnvOutput`,
+ * keyed by whatever case the environment block reported — and Windows does not
+ * normalise that case, it follows the registry value name. A machine whose
+ * PATH value name is stored lowercase yields the key `path`, which an
+ * exact-case read misses entirely, launching the Harness with an empty PATH
+ * (issue #232). `process.env` never has this problem because Node makes it
+ * case-insensitive on win32 — but spreading it into a plain object keeps
+ * only the stored casing, so every copy needs this lookup too.
+ *
+ * POSIX keeps the exact read: there `path` and `PATH` are genuinely
+ * different variables.
+ */
+export function resolveEnvironmentPath(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform
+): string {
+  if (platform !== 'win32') return environment.PATH ?? ''
+  // Exact-case reads first; the scan is the last resort for other casings.
+  // A real Windows block stores a single casing, so the order between them
+  // is never observable outside synthetic inputs.
+  const direct = environment.Path ?? environment.PATH
+  if (direct !== undefined) return direct
+  for (const [name, value] of Object.entries(environment)) {
+    if (/^path$/iu.test(name) && value !== undefined) return value
+  }
+  return ''
+}
+
 export function buildHarnessSpawnOptions(
   launchDirectory: string,
   dshHome: string,
@@ -186,23 +241,34 @@ export function buildHarnessSpawnOptions(
   // utility process is launched with Chromium switches (--type=utility, …)
   // that Node rejects as bad options. The Harness entry re-declares Node mode
   // from the inside, for its children only.
+  //
+  // On Windows, `detached: true` puts the Harness in its own process group
+  // and console. Without it, a child process that calls `os.kill(pid, 0)`
+  // (POSIX "liveness probe") ends up broadcasting a Ctrl+C to every process
+  // sharing the desktop's console — including the desktop main process, which
+  // exits silently. This is the same isolation that the Harness's own
+  // subprocess layer is expected to apply; we apply it here so the desktop
+  // shell never becomes collateral damage for a buggy child (issue #208).
   return {
     cwd: launchDirectory,
     env: {
       ...parentEnvironment,
       DSH_HOME: dshHome,
       NO_COLOR: '1',
-      PNPM_MAX_WORKERS: '1',
-      npm_config_child_concurrency: '1',
-      npm_config_package_import_method: 'clone-or-copy',
+      // package-import-method/child-concurrency are left at pnpm's defaults
+      // (hardlink, auto concurrency): forcing clone-or-copy made every
+      // install do a full physical file copy across the profile's 150+
+      // packages, which is what turned installs that should take seconds
+      // into multi-minute (up to 30-minute) waits on Windows. The Windows
+      // locked-rename problem this was meant to route around is handled by
+      // the dedicated lock-recovery runner instead (see pnpm-runner.mjs).
       npm_config_side_effects_cache: 'false',
-      PNPM_CONFIG_CHILD_CONCURRENCY: '1',
-      PNPM_CONFIG_PACKAGE_IMPORT_METHOD: 'clone-or-copy',
       PNPM_CONFIG_SIDE_EFFECTS_CACHE: 'false',
-      [pathKey]: environment[pathKey] ?? environment.PATH ?? ''
+      [pathKey]: resolveEnvironmentPath(environment, platform)
     },
     stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true
+    windowsHide: true,
+    detached: platform === 'win32'
   }
 }
 
@@ -235,6 +301,22 @@ export function updateReadyStability(
   }
 }
 
+/**
+ * A loopback response proves only that the Host has opened its port. Since
+ * 0.1.2-alpha.1 the renderer also needs the per-process launch token printed
+ * on stdout; navigating before that line arrives produces the authentication
+ * error page instead of exchanging the token for a session cookie.
+ *
+ * The unauthenticated readiness probe is expected to receive 401, so any
+ * non-server-error response is acceptable once the token is available.
+ */
+export function isHarnessStartupProbeHealthy(
+  status: number,
+  launchToken: string | undefined
+): boolean {
+  return launchToken !== undefined && status >= 200 && status < 500
+}
+
 export class HarnessRuntime {
   private child?: HarnessChildProcess
   private logStream?: WriteStream
@@ -242,6 +324,7 @@ export class HarnessRuntime {
   private message = 'Harness is not running.'
   private launchDirectory?: string
   private url?: string
+  private launchToken?: string
   private readonly logLines: string[] = []
   private readonly logRemainders: Record<'stdout' | 'stderr', string> = {
     stdout: '',
@@ -256,6 +339,7 @@ export class HarnessRuntime {
       message: this.message,
       launchDirectory: this.launchDirectory,
       url: this.url,
+      authToken: this.launchToken,
       logs: [...this.logLines]
     }
   }
@@ -266,6 +350,7 @@ export class HarnessRuntime {
     this.logRemainders.stderr = ''
     this.launchDirectory = launchDirectory
     this.url = undefined
+    this.launchToken = undefined
 
     if (!existsSync(this.options.dshEntryPath)) {
       this.setState('failed', `Harness entry was not found: ${this.options.dshEntryPath}`)
@@ -340,6 +425,7 @@ export class HarnessRuntime {
       // failure (a graceful SIGTERM may otherwise be reported as exit 0).
       this.child = undefined
       this.url = undefined
+      this.launchToken = undefined
       this.writeLog('[desktop] Harness entry failed during startup; stopping immediately')
       this.setState('failed', `Harness could not start.\n${cause}`)
       void this.stopChild(child).catch((error) => {
@@ -378,6 +464,7 @@ ${cause}`
     const ready = await waitUntilReady(
       url,
       () => this.child === child && child.exitCode === null,
+      () => this.launchToken,
       startupTimeoutMs
     ).finally(() => clearInterval(progressTimer))
 
@@ -408,6 +495,7 @@ ${cause}`
     await this.stopChild(child)
     this.closeLog()
     this.url = undefined
+    this.launchToken = undefined
     this.setState('idle', 'Harness is not running.')
   }
 
@@ -434,7 +522,9 @@ ${cause}`
     const lines = `${this.logRemainders[source]}${chunk.toString('utf8')}`.split(/\r?\n/)
     this.logRemainders[source] = lines.pop() ?? ''
     for (const line of lines) {
-      if (line.length > 0) this.writeLog(`[${source}] ${line}`)
+      if (line.length === 0) continue
+      this.writeLog(`[${source}] ${line}`)
+      this.launchToken ??= extractLaunchToken(line)
     }
   }
 
@@ -675,6 +765,7 @@ async function reservePort(): Promise<number> {
 async function waitUntilReady(
   url: string,
   isAlive: () => boolean,
+  launchToken: () => string | undefined,
   timeoutMs: number
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
@@ -685,7 +776,7 @@ async function waitUntilReady(
       const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(1_000) })
       const stability = updateReadyStability(
         readySince,
-        response.status >= 200 && response.status < 500,
+        isHarnessStartupProbeHealthy(response.status, launchToken()),
         Date.now(),
         stabilityWindowMs
       )

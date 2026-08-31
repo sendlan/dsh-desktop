@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { appendFileSync, existsSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { parse } from 'yaml'
 import {
   app,
@@ -10,12 +10,13 @@ import {
   Menu,
   nativeTheme,
   shell,
+  Tray,
   utilityProcess,
   WebContentsView,
   type IpcMainInvokeEvent,
   type MessageBoxOptions
 } from 'electron'
-import { extractFailureCause, HarnessRuntime, resolveShellEnvironment } from './runtime/harness-runtime'
+import { extractFailureCause, HarnessRuntime } from './runtime/harness-runtime'
 import { launchDisclaimedUtilityProcess } from './runtime/disclaimed-utility-process'
 import {
   installProfileDependenciesWithDsh,
@@ -28,6 +29,13 @@ import {
   markProfileInstallComplete
 } from './state/profile-install-marker'
 import { inspectProfileConsistency } from './state/profile-consistency'
+import {
+  disableProfilePlugins,
+  inspectProfileCompatibility,
+  quarantineProfileCorePackages,
+  quarantineProfileWorkspaces,
+  type ProfileCompatibilityIssue
+} from './state/profile-compatibility'
 import { ensureStoreDirPinned, inspectStoreConsistency } from './state/profile-store'
 import { LanMobileBridge } from './mobile/lan-mobile-bridge'
 import {
@@ -35,18 +43,52 @@ import {
   PLUGIN_RECOVERY_EVIDENCE_TIMEOUT_MS
 } from './plugin-recovery-detection'
 import { isDaemonLaunch, isUserInitiatedInstance } from './launchd-guard'
+import {
+  type GpuFallbackState,
+  defaultGpuFallbackState,
+  gpuFallbackStateEquals,
+  gpuFallbackSwitches,
+  isGpuLossFatal,
+  parseGpuFallbackState,
+  planGpuFallbackResponse,
+  planStableLaunch,
+  serializeGpuFallbackState
+} from './gpu-fallback'
 import { secureWindow } from './security'
 import { ensureLaunchRoot } from './state/launch-root'
 import {
   listInstalledProfilePlugins,
   pruneMissingProfileBundles,
-  resetPluginProfile,
-  uninstallPluginFromProfile
+  resetPluginProfile
 } from './state/plugin-recovery'
 import { ensureSafeModeProfile, SAFE_MODE_PROFILE } from './state/safe-mode-profile'
-import { cleanupPluginOwnedComponents } from './state/plugin-component-cleanup'
-import { appBundlePathFromExecutable, auditLaunchAgents } from './state/launch-agent-audit'
 import {
+  prepareGenerationsForLaunch,
+  uninstallGenerationPlugin
+} from './state/generation-launch'
+import {
+  confirmMigration,
+  isProfileMigrated,
+  migrateProfileToGenerations,
+  recoverInterruptedMigration,
+  rollBackMigration
+} from './state/generation-migration'
+import { cleanupPluginOwnedComponents } from './state/plugin-component-cleanup'
+import {
+  confirmPluginRemovalsBooted,
+  enforcePendingPluginRemovals,
+  listPendingPluginRemovals,
+  removePluginSafely,
+  shouldDeferProfileMaintenance,
+  type PluginRemovalResult
+} from './state/plugin-removal'
+import {
+  appBundlePathFromExecutable,
+  auditLaunchAgents,
+  quarantineAppBundleLaunchAgents
+} from './state/launch-agent-audit'
+import {
+  clearStaleHarnessAuthCookies,
   desktopHarnessUrl,
   isAbortedNavigationError,
   shouldLoadHarnessUrl
@@ -74,10 +116,15 @@ import { buildPluginRecoveryViewModel } from './plugin-recovery-view'
 import { buildSafeModeViewModel, shouldStartInSafeMode } from './safe-mode'
 import { aboutDetail, bundledHarnessVersion } from './version-info'
 import { windowsMenuViewBounds } from './windows-menu-view'
+import { shouldKeepRunningInBackground } from './close-to-tray'
+import {
+  MAIN_WINDOW_RECOVERY_RELOAD_COOLDOWN_MS,
+  shouldReloadAfterMainWindowRendererLoss
+} from './main-window-recovery'
 
 type PluginRecoveryAction = 'uninstall' | 'show-log' | 'quit' | 'restart' | 'refresh' | 'safe-mode'
 type SafeModeAction =
-  | { type: 'uninstall'; plugins: string[] }
+  | { type: 'apply'; plugins: string[]; issues: string[] }
   | { type: 'agent' }
   | { type: 'restart' }
   | { type: 'quit' }
@@ -95,6 +142,7 @@ let windowsMenuView: WebContentsView | undefined
 let windowsMenuOpen = false
 let windowsMenuDark = false
 let mobileWindow: BrowserWindow | undefined
+let tray: Tray | undefined
 let runtime: HarnessRuntime
 let mobileBridge: LanMobileBridge
 let launchDirectory: string
@@ -112,7 +160,25 @@ let safeModeVisible = false
 let safeModeManagerVisible = false
 let safeModeManagerWindow: BrowserWindow | undefined
 let safeModeActionResolver: ((action: SafeModeAction) => void) | undefined
+// A renderer that crashes (render-process-gone) and reloads that fails the
+// same way produces a permanent black window the user has to close by hand.
+// The cooldown keeps reloads from stacking up when the underlying crash
+// (almost always the GPU process) keeps recurring, and the counter gives us
+// a way to give up after enough attempts and surface the harness failure
+// page instead of hammering the GPU.
+let mainWindowRecoveryReloadAt = 0
+let mainWindowRecoveryReloadCount = 0
 const startInSafeMode = shouldStartInSafeMode(process.argv)
+// The GPU process can die before the harness is ever on screen, which is the
+// whole reason the fallback exists; tracking the first harness render is what
+// separates "this launch is unusable" from "the user is mid-task". Splash and
+// the recovery page do not count: both are local pages that render on a
+// machine whose harness never will.
+let harnessRendered = false
+let pluginRemovalsConfirmedThisProcess = false
+let gpuFallbackState: GpuFallbackState = defaultGpuFallbackState
+let gpuFallbackRelaunching = false
+let gpuStableLaunchTimer: NodeJS.Timeout | undefined
 
 function appendRendererPluginFailureLog(message: string): void {
   const trimmed = message.trim()
@@ -203,6 +269,95 @@ function isDevelopmentBuild(): boolean {
 }
 
 const developmentBuild = isDevelopmentBuild()
+
+/**
+ * Record a renderer/GPU process loss in the harness log so the cause survives
+ * a restart. Without this, a black window after running for a while leaves
+ * nothing to diagnose — the desktop keeps the BrowserWindow alive and the
+ * user has to close it by hand with no breadcrumb in the log.
+ */
+function recordMainWindowRendererLoss(
+  source: 'render-process-gone' | 'did-fail-load' | 'unresponsive',
+  details: string
+): void {
+  if (!runtime) return
+  runtime.note(`[desktop] main window ${source}: ${details}`)
+}
+
+function reloadMainWindowAfterRendererLoss(window: BrowserWindow): void {
+  if (window.isDestroyed() || window.webContents.isDestroyed()) return
+  const now = Date.now()
+  if (!shouldReloadAfterMainWindowRendererLoss({
+    now,
+    lastReloadAt: mainWindowRecoveryReloadAt,
+    reloadCount: mainWindowRecoveryReloadCount
+  })) {
+    recordMainWindowRendererLoss(
+      'render-process-gone',
+      'reload throttled; surfacing harness failure instead'
+    )
+    const snapshot = runtime?.snapshot()
+    if (snapshot && runtime?.snapshot().phase === 'ready') {
+      // Reloading is failing on its own. Step the runtime back to 'failed' so
+      // the plugin-recovery page is shown and the user can recover without a
+      // hard restart.
+      void showPluginRecovery({
+        message: 'Harness web view stopped responding. Reload it to continue.',
+        logs: snapshot.logs
+      }).catch(showUnexpectedError)
+    }
+    return
+  }
+  mainWindowRecoveryReloadAt = now
+  mainWindowRecoveryReloadCount += 1
+  // Schedule a counter reset long after the cooldown so a single, isolated
+  // crash recovers cleanly while a sustained failure still trips the cap.
+  setTimeout(() => {
+    mainWindowRecoveryReloadCount = 0
+  }, MAIN_WINDOW_RECOVERY_RELOAD_COOLDOWN_MS * 4).unref?.()
+  try {
+    void window.webContents.reload()
+  } catch (error) {
+    recordMainWindowRendererLoss(
+      'render-process-gone',
+      `reload threw: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+}
+
+function installMainWindowRendererRecovery(window: BrowserWindow): void {
+  const webContents = window.webContents
+  webContents.on('render-process-gone', (event, details) => {
+    // Take control: by default the window stays drawn but blank, which is
+    // exactly the black screen this recovery is meant to prevent.
+    event.preventDefault()
+    const reason = details?.reason ?? 'unknown'
+    const exitCode = details?.exitCode ?? -1
+    recordMainWindowRendererLoss('render-process-gone', `reason=${reason} exitCode=${exitCode}`)
+    reloadMainWindowAfterRendererLoss(window)
+  })
+  webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return
+    // The harness web server is local; a failure to reach it is almost
+    // always the renderer dropping, not a real network error. Surface the
+    // failure and let the recovery path try to reload the page.
+    recordMainWindowRendererLoss(
+      'did-fail-load',
+      `errorCode=${errorCode} description=${errorDescription} url=${validatedURL}`
+    )
+    reloadMainWindowAfterRendererLoss(window)
+  })
+  webContents.on('unresponsive', () => {
+    // unresponsive fires before the renderer actually dies, so logging here
+    // gives a useful "the GPU froze here" breadcrumb for the next time
+    // the user has to recover the window.
+    recordMainWindowRendererLoss('unresponsive', 'main window webContents became unresponsive')
+  })
+  webContents.on('responsive', () => {
+    if (!runtime) return
+    runtime.note('[desktop] main window webContents became responsive again')
+  })
+}
 
 function windowsTitleBarOverlay(isDark: boolean): Electron.TitleBarOverlayOptions {
   return {
@@ -421,6 +576,118 @@ function harnessLocale(): 'en' | 'zh' {
   }
 }
 
+function gpuFallbackStatePath(): string {
+  return join(app.getPath('userData'), 'gpu-fallback.json')
+}
+
+function readGpuFallbackState(): GpuFallbackState {
+  try {
+    return parseGpuFallbackState(readFileSync(gpuFallbackStatePath(), 'utf8'))
+  } catch {
+    return defaultGpuFallbackState
+  }
+}
+
+function writeGpuFallbackState(state: GpuFallbackState): void {
+  try {
+    writeFileSync(gpuFallbackStatePath(), serializeGpuFallbackState(state))
+  } catch {
+    // A fallback we cannot persist still applies to this launch; the next
+    // launch simply rediscovers it the same way this one did.
+  }
+}
+
+/**
+ * Apply the switches a previous launch discovered this machine needs. This
+ * has to run before Chromium boots, so it lives beside the other pre-ready
+ * command line configuration rather than in `bootstrap`.
+ */
+function configureGpuFallback(): void {
+  gpuFallbackState = readGpuFallbackState()
+  for (const name of gpuFallbackSwitches(gpuFallbackState.level)) {
+    app.commandLine.appendSwitch(name)
+  }
+  // Electron wants hardware acceleration turned off through its own call
+  // rather than the switch alone; the switches stay because they also cover
+  // compositing and the sandbox, which this API does not.
+  if (gpuFallbackState.level === 'gpu-disabled') app.disableHardwareAcceleration()
+}
+
+/**
+ * How long a launch has to hold on to its GPU process before it counts as
+ * stable. Long enough that the crash loop this fallback exists for has already
+ * happened, short enough that a normal session always reaches it.
+ */
+const GPU_STABLE_LAUNCH_DELAY_MS = 60_000
+
+/**
+ * Note that this launch rendered the harness and, if it then keeps its GPU
+ * process for a while, that it ran cleanly — which is what eventually lets a
+ * degraded machine climb back towards a sandboxed, hardware-accelerated
+ * Chromium.
+ */
+function markHarnessRendered(): void {
+  if (harnessRendered) return
+  harnessRendered = true
+  const dshHome = join(app.getPath('userData'), 'harness')
+  // A migrated profile that rendered a window is confirmed; the pre-upgrade
+  // snapshot is no longer needed.
+  if (isProfileMigrated(dshHome)) {
+    void confirmMigration(dshHome, (line) => runtime?.note(line))
+  }
+  if (gpuFallbackState.level === 'default' && gpuFallbackState.stableLaunches === 0) return
+  gpuStableLaunchTimer = setTimeout(() => {
+    gpuStableLaunchTimer = undefined
+    const next = planStableLaunch(gpuFallbackState)
+    if (gpuFallbackStateEquals(next, gpuFallbackState)) return
+    if (next.level !== gpuFallbackState.level) {
+      runtime?.note(
+        `[desktop] GPU fallback lowered to ${next.level} after ` +
+          `${gpuFallbackState.stableLaunches + 1} stable launches`
+      )
+    }
+    gpuFallbackState = next
+    writeGpuFallbackState(next)
+  }, GPU_STABLE_LAUNCH_DELAY_MS)
+  gpuStableLaunchTimer.unref?.()
+}
+
+/**
+ * Watch for the GPU process going away and step the fallback forward. A
+ * launch whose harness never rendered is relaunched right away, because no
+ * window the user could act on exists; a launch that did render keeps going
+ * and only degrades once losses pile up, so a single crash during a driver
+ * update cannot cost this machine its GPU sandbox.
+ */
+function installGpuFallbackWatch(): void {
+  app.on('child-process-gone', (_event, details) => {
+    if (details.type !== 'GPU') return
+    if (gpuFallbackRelaunching || quitting) return
+    // Chromium tears the GPU process down on shutdown and Electron reports it
+    // here like any other loss; degrading on that would degrade everyone.
+    if (!isGpuLossFatal(details.reason)) return
+    if (gpuStableLaunchTimer) {
+      clearTimeout(gpuStableLaunchTimer)
+      gpuStableLaunchTimer = undefined
+    }
+    runtime?.note(
+      `[desktop] GPU process gone: reason=${details.reason} exitCode=${details.exitCode} ` +
+        `fallback=${gpuFallbackState.level} failures=${gpuFallbackState.failures}`
+    )
+    const plan = planGpuFallbackResponse({ state: gpuFallbackState, harnessRendered })
+    const escalated = plan.state.level !== gpuFallbackState.level
+    if (!gpuFallbackStateEquals(plan.state, gpuFallbackState)) {
+      gpuFallbackState = plan.state
+      writeGpuFallbackState(plan.state)
+    }
+    if (escalated) runtime?.note(`[desktop] GPU fallback raised to ${plan.state.level}`)
+    if (!plan.relaunch) return
+    gpuFallbackRelaunching = true
+    app.relaunch()
+    app.exit(0)
+  })
+}
+
 function configureApplicationLocale(): void {
   app.commandLine.appendSwitch('lang', harnessLocale() === 'zh' ? 'zh-CN' : 'en-US')
 }
@@ -475,6 +742,39 @@ function installPluginRecoveryNavigation(window: BrowserWindow): void {
   })
 }
 
+function restoreMainWindow(): void {
+  const window = mainWindow
+  if (window && !window.isDestroyed()) {
+    if (window.isMinimized()) window.restore()
+    window.show()
+    window.focus()
+    return
+  }
+
+  const snapshot = runtime?.snapshot()
+  if (snapshot?.phase === 'ready' && snapshot.url) {
+    void openHarness(snapshot.url, 'user').catch(showUnexpectedError)
+  } else if (snapshot?.phase === 'idle') {
+    void launchHarness().catch(showUnexpectedError)
+  }
+}
+
+function ensureTray(): void {
+  if (process.platform !== 'win32' || tray) return
+
+  const locale = harnessLocale()
+  tray = new Tray(desktopIconPath())
+  tray.setToolTip('DSH Desktop')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: locale === 'zh' ? '显示 DSH Desktop' : 'Show DSH Desktop', click: restoreMainWindow },
+      { type: 'separator' },
+      { label: locale === 'zh' ? '退出' : 'Exit', click: () => app.quit() }
+    ])
+  )
+  tray.on('click', restoreMainWindow)
+}
+
 function createWindow(): BrowserWindow {
   const isWindows = process.platform === 'win32'
   const window = new BrowserWindow({
@@ -508,6 +808,11 @@ function createWindow(): BrowserWindow {
   } else if (isWindows) {
     window.setMenuBarVisibility(false)
   }
+  window.on('close', (event) => {
+    if (!shouldKeepRunningInBackground(process.platform, quitting)) return
+    event.preventDefault()
+    window.hide()
+  })
   window.on('page-title-updated', (event) => {
     event.preventDefault()
     window.setTitle('')
@@ -521,6 +826,7 @@ function createWindow(): BrowserWindow {
   installPluginRecoveryNavigation(window)
   secureWindow(window)
   installContextMenu(window, harnessLocale)
+  installMainWindowRendererRecovery(window)
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = undefined
     if (windowsMenuView && !windowsMenuView.webContents.isDestroyed()) {
@@ -541,11 +847,26 @@ async function openHarness(
   focusIntent: WindowFocusIntent = 'automatic'
 ): Promise<void> {
   const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
-  const rendererUrl = desktopHarnessUrl(url, process.platform)
+  const rendererUrl = desktopHarnessUrl(url, process.platform, runtime.snapshot().authToken)
   if (shouldLoadHarnessUrl(window.webContents.getURL(), url)) {
     const navigationVersion = ++mainWindowNavigationVersion
     rendererPluginFailureLogs = []
     window.webContents.stop()
+    const clearedCookies = await clearStaleHarnessAuthCookies(
+      window.webContents.session.cookies,
+      rendererUrl,
+      runtime.snapshot().authToken
+    ).catch((error) => {
+      runtime.note(
+        `[desktop] stale Harness cookie cleanup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      )
+      return 0
+    })
+    if (clearedCookies > 0) {
+      runtime.note(`[desktop] cleared ${clearedCookies} stale Harness authentication cookie(s)`)
+    }
     try {
       await window.loadURL(rendererUrl)
     } catch (error) {
@@ -556,6 +877,15 @@ async function openHarness(
       throw error
     }
     if (navigationVersion !== mainWindowNavigationVersion) return
+  }
+  markHarnessRendered()
+  // Safe Mode proves only the isolated recovery profile. Confirm an uninstall
+  // against the normal web profile once per app process, so its backup gets a
+  // full later launch before it is garbage-collected.
+  if (!safeModeVisible && !pluginRemovalsConfirmedThisProcess) {
+    pluginRemovalsConfirmedThisProcess = true
+    const dshHome = join(app.getPath('userData'), 'harness')
+    void confirmPluginRemovalsBooted(dshHome, (line) => runtime?.note(line)).catch(() => undefined)
   }
   if (runtime.snapshot().url !== url || window.isDestroyed()) return
   await syncNativeTheme(window)
@@ -662,16 +992,38 @@ async function auditInstalledLaunchAgents(dshHome: string): Promise<void> {
     })
     for (const finding of result.findings) {
       const owner = finding.owner === undefined ? '' : ` installed by ${finding.owner}`
-      runtime.note(
-        finding.action === 'escalated'
-          ? `[desktop] ${finding.label}${owner} keeps recreating a background service that starts DSH Desktop; consider removing that plugin`
-          : `[desktop] ${finding.action} the background service ${finding.label}${owner}`
-      )
+      runtime.note(`[desktop] ${finding.action} the background service ${finding.label}${owner}`)
     }
     for (const failure of result.failures) runtime.note(`[desktop] launch agent audit: ${failure}`)
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     runtime.note(`[desktop] launch agent audit failed: ${detail}`)
+  }
+}
+
+/**
+ * A LaunchAgent executing anything from inside this application bundle races
+ * an in-place update even when it is correctly configured as Node. Harness is
+ * already stopped by the caller, so quarantine is durable for the update
+ * window. Any failure aborts the install instead of risking a partial bundle.
+ */
+async function quarantineInstalledLaunchAgentsForUpdate(dshHome: string): Promise<void> {
+  const appBundlePath = appBundlePathFromExecutable(process.execPath)
+  if (appBundlePath === undefined) return
+  const result = await quarantineAppBundleLaunchAgents({
+    dshHome,
+    appBundlePath,
+    log: (message) => runtime.note(message)
+  })
+  for (const finding of result.findings) {
+    const owner = finding.owner === undefined ? '' : ` installed by ${finding.owner}`
+    runtime.note(
+      `[desktop] quarantined the background service ${finding.label}${owner} before update`
+    )
+  }
+  if (result.failures.length > 0) {
+    for (const failure of result.failures) runtime.note(`[desktop] pre-update launch agent: ${failure}`)
+    throw new Error('Unable to stop background services before replacing DSH Desktop.')
   }
 }
 
@@ -690,11 +1042,67 @@ function launchHarness(): Promise<void> {
     // every package operation fail, repairs included.
     const pinned = await ensureStoreDirPinned(dshHome).catch(() => undefined)
     if (pinned) runtime.note(`[desktop] pinned the profile's pnpm store: ${pinned}`)
-    await repairProfilePackages(dshHome)
+    // A prior process may have stopped midway through the one-time migration.
+    // Restore its snapshot before projection or package repair can observe the
+    // partially switched profile.
+    await recoverInterruptedMigration(dshHome, (line) => runtime.note(line))
+    // A removal tombstone is authoritative even if its later cleanup failed.
+    // Enforce it before and after projection so a generation pointer cannot
+    // silently add the disabled bundle back during a recovery launch.
+    await enforcePendingPluginRemovals(dshHome, (line) => runtime.note(line))
+    // Cold start, Harness stopped: sweep unreferenced plugin generations and
+    // reproject so the profile's links match `desired`. A no-op on a profile
+    // that has never used a generation.
+    await prepareGenerationsForLaunch(dshHome, (line) => runtime.note(line))
+    await enforcePendingPluginRemovals(dshHome, (line) => runtime.note(line))
+    // One-time move of a pre-upgrade profile (community plugins in the shared
+    // tree) onto the generation model. Runs before the shared-tree repair and,
+    // when it succeeds, replaces it — the migration has already rebuilt the
+    // tree down to what stays there.
+    const deferMaintenance = await shouldDeferProfileMaintenance(dshHome).catch(() => false)
+    let migrated = false
+    if (deferMaintenance) {
+      runtime.note('[desktop] profile package maintenance deferred while plugin removal is pending verification')
+    } else {
+      migrated = await migrateProfileToGenerations({
+        dshHome,
+        nodeExecutablePath: bundledNodePath(),
+        pnpmEntryPath: bundledPnpmEntryPath(),
+        dshEntryPath: dshEntryPath(),
+        note: (line) => runtime.note(line),
+        reinstallSharedTree: async () => {
+          await clearProfileInstallMarker(dshHome)
+          const result = await installProfileDependenciesWithDsh({
+            dshHome,
+            dshEntryPath: dshEntryPath(),
+            nodeExecutablePath: bundledNodePath(),
+            pnpmEntryPath: bundledPnpmEntryPath(),
+            pnpmRunnerPath: bundledPnpmRunnerPath()
+          })
+          if (result.ok) await markProfileInstallComplete(dshHome)
+          return result
+        }
+      })
+      if (!migrated) await repairProfilePackages(dshHome)
+    }
     await pruneMissingProfileBundles(dshHome).catch(() => false)
     await reportProfileConsistency(dshHome)
     await auditInstalledLaunchAgents(dshHome)
     await runtime.start(launchDirectory)
+
+    // A failed launch must not rewrite the user's enabled plugin set. Recovery
+    // and Safe Mode operate on explicit, exact plugin selections; automatically
+    // restoring a stale snapshot can resurrect an incompatible old version or
+    // collapse the whole profile when that snapshot is empty.
+    if (runtime.snapshot().phase !== 'ready') {
+      // A migration that did not boot rolls the whole profile back to the
+      // pre-upgrade snapshot — nothing was lost, and the old shared-tree path
+      // runs next launch.
+      if (migrated && (await rollBackMigration(dshHome, (line) => runtime.note(line)))) {
+        await repairProfilePackages(dshHome)
+        await runtime.start(launchDirectory)
+      }
+    }
   })().finally(() => {
     harnessLaunchOperation = undefined
   })
@@ -730,6 +1138,28 @@ function restartHarness(): Promise<void> {
   return launchHarness()
 }
 
+async function uninstallMarketAndRestart(): Promise<{ ok: boolean }> {
+  const dshHome = join(app.getPath('userData'), 'harness')
+  await showSplash()
+  await runtime.stop()
+  const result = await removeProfilePluginWithDsh(
+    {
+      dshHome,
+      dshEntryPath: dshEntryPath(),
+      nodeExecutablePath: bundledNodePath(),
+      pnpmEntryPath: bundledPnpmEntryPath(),
+      pnpmRunnerPath: bundledPnpmRunnerPath()
+    },
+    'dshmarket',
+    true
+  )
+  await launchHarness()
+  if (!result.ok) {
+    throw new Error(result.detail ?? 'Plugin market removal failed.')
+  }
+  return { ok: runtime.snapshot().phase === 'ready' }
+}
+
 function registerHarnessHandlers(): void {
   ipcMain.removeHandler('harness:restart')
   ipcMain.handle('harness:restart', async (event) => {
@@ -742,6 +1172,15 @@ function registerHarnessHandlers(): void {
 
     await restartHarness()
     return { ok: runtime.snapshot().phase === 'ready' }
+  })
+
+  ipcMain.removeHandler('market:uninstall')
+  ipcMain.handle('market:uninstall', async (event) => {
+    assertTrustedMainWindowEvent(event)
+    if (runtime.snapshot().phase !== 'ready') {
+      throw new Error('Harness is not ready to uninstall the plugin market.')
+    }
+    return uninstallMarketAndRestart()
   })
 
   ipcMain.removeHandler('desktop-menu:execute')
@@ -1026,15 +1465,14 @@ async function showPluginRecovery(options?: {
         applyPendingFrontendEvidence()
         continue
       } else if (action === 'uninstall' && detection.plugins.length > 0) {
+        // The normal web Harness may still have the failing plugin imported.
+        // macOS permits renaming an open directory, but Windows does not; stop
+        // the process before quarantine so both platforms use the same path.
+        await runtime.stop()
         const failedPlugins: string[] = []
         for (const plugin of detection.plugins) {
-          const removed = await removeProfilePluginCompletely(
-            dshHome,
-            plugin,
-            resolveShellEnvironment(),
-            'plugin-recovery'
-          )
-          if (removed) {
+          const removal = await removeProfilePluginCompletely(dshHome, plugin, 'plugin-recovery')
+          if (removal.disabled) {
             if (!removedPlugins.includes(plugin)) removedPlugins.push(plugin)
           } else {
             failedPlugins.push(plugin)
@@ -1102,6 +1540,7 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
 
 async function waitForSafeModeAction(options: {
   plugins: readonly string[]
+  issues: readonly ProfileCompatibilityIssue[]
   notice?: string
   noticeTone?: 'success' | 'error'
 }): Promise<SafeModeAction> {
@@ -1147,6 +1586,7 @@ async function waitForSafeModeAction(options: {
   const model = buildSafeModeViewModel({
     locale: harnessLocale(),
     plugins: options.plugins,
+    issues: options.issues,
     notice: options.notice,
     noticeTone: options.noticeTone
   })
@@ -1173,57 +1613,92 @@ async function waitForSafeModeAction(options: {
   return actionPromise
 }
 
-async function removeSafeModePlugin(dshHome: string, pluginName: string): Promise<boolean> {
-  return removeProfilePluginCompletely(
-    dshHome,
-    pluginName,
-    process.env,
-    'safe-mode'
-  )
+async function removeSafeModePlugin(
+  dshHome: string,
+  pluginName: string
+): Promise<PluginRemovalResult> {
+  return removeProfilePluginCompletely(dshHome, pluginName, 'safe-mode')
+}
+
+async function repairSafeModeCompatibilityIssues(
+  dshHome: string,
+  issues: readonly ProfileCompatibilityIssue[]
+): Promise<{ repaired: string[]; failed: string[]; installFailed?: string }> {
+  const repaired: string[] = []
+  const failed: string[] = []
+  const pluginIssues = issues.filter((issue) => issue.resolution === 'disable-plugin')
+  const workspaceIssues = issues.filter((issue) => issue.resolution === 'quarantine-workspace')
+  const coreIssues = issues.filter((issue) => issue.resolution === 'rebuild-profile')
+
+  if (pluginIssues.length > 0) {
+    const targets = [...new Set(pluginIssues.map((issue) => issue.target))]
+    const disabled = await disableProfilePlugins(dshHome, targets)
+    repaired.push(...pluginIssues.filter((issue) => disabled.includes(issue.target)).map((issue) => issue.id))
+    failed.push(...pluginIssues.filter((issue) => !disabled.includes(issue.target)).map((issue) => issue.id))
+  }
+
+  if (workspaceIssues.length > 0) {
+    const targets = [...new Set(workspaceIssues.map((issue) => issue.target))]
+    const quarantined = await quarantineProfileWorkspaces(dshHome, targets)
+    repaired.push(
+      ...workspaceIssues
+        .filter((issue) => quarantined.includes(issue.packageName))
+        .map((issue) => issue.id)
+    )
+    failed.push(
+      ...workspaceIssues
+        .filter((issue) => !quarantined.includes(issue.packageName))
+        .map((issue) => issue.id)
+    )
+  }
+
+  if (coreIssues.length > 0) {
+    const targets = [...new Set(coreIssues.map((issue) => issue.target))]
+    const quarantined = await quarantineProfileCorePackages(dshHome, targets)
+    repaired.push(...coreIssues.filter((issue) => quarantined.includes(issue.target)).map((issue) => issue.id))
+    failed.push(...coreIssues.filter((issue) => !quarantined.includes(issue.target)).map((issue) => issue.id))
+  }
+
+  if (workspaceIssues.length > 0 || coreIssues.length > 0) {
+    await clearProfileInstallMarker(dshHome)
+    const result = await installProfileDependenciesWithDsh({
+      dshHome,
+      dshEntryPath: dshEntryPath(),
+      nodeExecutablePath: bundledNodePath(),
+      pnpmEntryPath: bundledPnpmEntryPath(),
+      pnpmRunnerPath: bundledPnpmRunnerPath()
+    })
+    if (!result.ok) return { repaired, failed, installFailed: result.detail ?? 'unknown error' }
+    await markProfileInstallComplete(dshHome)
+  }
+
+  return { repaired, failed }
 }
 
 async function removeProfilePluginCompletely(
   dshHome: string,
   pluginName: string,
-  environment: NodeJS.ProcessEnv,
   logPrefix: string
-): Promise<boolean> {
-  const cleanup = await cleanupPluginOwnedComponents({
+): Promise<PluginRemovalResult> {
+  const result = await removePluginSafely({
     dshHome,
     pluginName,
-    log: (message) => runtime.note(`[${logPrefix}] ${message}`)
+    cleanupOwnedComponents: () => cleanupPluginOwnedComponents({
+      dshHome,
+      pluginName,
+      log: (message) => runtime.note(`[${logPrefix}] ${message}`)
+    }),
+    uninstallGeneration: () => uninstallGenerationPlugin(
+      dshHome,
+      pluginName,
+      (line) => runtime.note(line)
+    ),
+    note: (line) => runtime.note(`[${logPrefix}] ${line}`)
   })
-  if (!cleanup.ok) {
-    for (const failure of cleanup.failures) {
-      runtime.note(`[${logPrefix}] failed to clean components for ${pluginName}: ${failure}`)
-    }
-    return false
+  for (const failure of result.failures) {
+    runtime.note(`[${logPrefix}] ${pluginName} remains disabled; cleanup pending: ${failure}`)
   }
-
-  const removed = await uninstallPluginFromProfile(dshHome, pluginName, async (name) => {
-    const result = await removeProfilePluginWithDsh(
-      {
-        dshHome,
-        dshEntryPath: dshEntryPath(),
-        nodeExecutablePath: bundledNodePath(),
-        pnpmEntryPath: bundledPnpmEntryPath(),
-        pnpmRunnerPath: bundledPnpmRunnerPath(),
-        environment
-      },
-      name
-    )
-    if (!result.ok) {
-      runtime.note(`[${logPrefix}] failed to remove ${name}: ${result.detail ?? 'unknown error'}`)
-    }
-    return result.ok
-  })
-  // Both recovery paths pass an exact configured root bundle. The fallback
-  // must not widen that ownership to similarly-named or same-scope siblings.
-  if (removed || await resetPluginProfile(dshHome, pluginName, false)) return true
-  // A package command can finish the profile edit but fail its own final
-  // verification (for example after a lockfile cleanup). Treat the observable
-  // profile state as authoritative instead of reporting a false failure.
-  return !(await listInstalledProfilePlugins(dshHome)).includes(pluginName)
+  return result
 }
 
 async function showSafeMode(): Promise<void> {
@@ -1249,8 +1724,19 @@ async function showSafeModeManager(): Promise<void> {
 
   try {
     while (!quitting) {
-      const installed = await listInstalledProfilePlugins(dshHome)
-      const action = await waitForSafeModeAction({ plugins: installed, notice, noticeTone })
+      const active = await listInstalledProfilePlugins(dshHome)
+      const pendingRemovals = await listPendingPluginRemovals(dshHome)
+      const installed = [...new Set([...active, ...pendingRemovals])]
+      const compatibility = await inspectProfileCompatibility(
+        dshHome,
+        join(app.getAppPath(), 'node_modules')
+      )
+      const action = await waitForSafeModeAction({
+        plugins: installed,
+        issues: compatibility.issues,
+        notice,
+        noticeTone
+      })
       notice = undefined
       noticeTone = undefined
 
@@ -1264,31 +1750,64 @@ async function showSafeModeManager(): Promise<void> {
         return
       }
       if (action.type === 'restart') {
+        const unresolved = compatibility.issues.filter((issue) => issue.severity === 'blocking')
+        if (unresolved.length > 0) {
+          runtime.note(
+            `[safe-mode] user exited with ${unresolved.length} unresolved compatibility issue${unresolved.length === 1 ? '' : 's'}`
+          )
+        }
         await launchHarness()
         void mobileBridge.start().catch(showUnexpectedError)
         return
       }
 
+      const issueById = new Map(compatibility.issues.map((issue) => [issue.id, issue]))
+      const selectedIssues = [...new Set(action.issues)]
+        .map((id) => issueById.get(id))
+        .filter((issue): issue is ProfileCompatibilityIssue => issue !== undefined)
       const installedSet = new Set(installed)
-      const selected = [...new Set(action.plugins)].filter((plugin) => installedSet.has(plugin))
-      if (selected.length === 0) {
-        notice = isChinese ? '请选择要卸载的插件。' : 'Select at least one plugin to remove.'
+      const selectedPlugins = [...new Set(action.plugins)].filter((plugin) => installedSet.has(plugin))
+      if (selectedIssues.length === 0 && selectedPlugins.length === 0) {
+        notice = isChinese ? '请选择要处理的插件或遗留项。' : 'Select at least one plugin or leftover to process.'
         noticeTone = 'error'
         continue
       }
 
-      const failed: string[] = []
-      for (const plugin of selected) {
-        if (!(await removeSafeModePlugin(dshHome, plugin))) failed.push(plugin)
+      let repaired = 0
+      let repairFailures = 0
+      if (selectedIssues.length > 0) {
+        const result = await repairSafeModeCompatibilityIssues(dshHome, selectedIssues)
+        if (result.installFailed) {
+          notice = isChinese
+            ? `已备份并应用部分修复，但依赖重建失败：${result.installFailed}`
+            : `Some recoverable repairs were applied, but dependency rebuild failed: ${result.installFailed}`
+          noticeTone = 'error'
+          continue
+        }
+        repaired = result.repaired.length
+        repairFailures = result.failed.length
       }
-      notice = failed.length === 0
+
+      const failedPlugins: string[] = []
+      const pendingPlugins: string[] = []
+      for (const plugin of selectedPlugins) {
+        const removal = await removeSafeModePlugin(dshHome, plugin)
+        if (!removal.disabled) failedPlugins.push(plugin)
+        else if (removal.pending) pendingPlugins.push(plugin)
+      }
+      const failed = repairFailures + failedPlugins.length
+      notice = pendingPlugins.length > 0
         ? isChinese
-          ? `成功卸载 ${selected.length} 个插件。`
-          : `Successfully removed ${selected.length} plugin${selected.length === 1 ? '' : 's'}.`
+          ? `已禁用 ${pendingPlugins.length} 个插件；物理清理待重试。插件不会在后续启动中重新启用。`
+          : `Disabled ${pendingPlugins.length} plugin${pendingPlugins.length === 1 ? '' : 's'}; physical cleanup is pending. They will stay disabled on later launches.`
+        : failed === 0
+        ? isChinese
+          ? `处理完成：修复 ${repaired} 项，卸载 ${selectedPlugins.length} 个插件。`
+          : `Completed: ${repaired} repair${repaired === 1 ? '' : 's'} and ${selectedPlugins.length} plugin removal${selectedPlugins.length === 1 ? '' : 's'}.`
         : isChinese
-          ? `以下插件未能卸载：${failed.join('、')}`
-          : `These plugins could not be removed: ${failed.join(', ')}`
-      noticeTone = failed.length === 0 ? 'success' : 'error'
+          ? `已修复 ${repaired} 项、卸载 ${selectedPlugins.length - failedPlugins.length} 个插件；${failed} 项未能处理。`
+          : `Completed ${repaired} repairs and removed ${selectedPlugins.length - failedPlugins.length} plugins; ${failed} items could not be processed.`
+      noticeTone = failed === 0 && pendingPlugins.length === 0 ? 'success' : 'error'
     }
   } finally {
     safeModeActionResolver = undefined
@@ -1403,6 +1922,17 @@ function installMenu(): void {
   }
 }
 
+/**
+ * Pushed on change rather than polled: the preload used to ask every second,
+ * in every window, for a flag that only moves when a phone pairs or drops.
+ */
+function broadcastMobileStatus(connected: boolean): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue
+    window.webContents.send('mobile:status-changed', { connected })
+  }
+}
+
 async function showMobilePairing(): Promise<void> {
   if (runtime.snapshot().phase !== 'ready') {
     const options: MessageBoxOptions = {
@@ -1465,6 +1995,7 @@ async function bootstrap(): Promise<void> {
   launchDirectory = await ensureLaunchRoot(app.getPath('userData'))
   registerUpdateHandlers()
   nativeTheme.themeSource = harnessThemePreference()
+  ensureTray()
   createWindow()
   runtime = new HarnessRuntime({
     dshEntryPath: dshEntryPath(),
@@ -1490,6 +2021,7 @@ async function bootstrap(): Promise<void> {
   registerHarnessHandlers()
   mobileBridge = new LanMobileBridge({
     harnessUrl: () => runtime.snapshot().url,
+    harnessAuthToken: () => runtime.snapshot().authToken,
     locale: harnessLocale,
     brandLogoPaths: {
       light: dshBrandLogoPath('light'),
@@ -1497,10 +2029,13 @@ async function bootstrap(): Promise<void> {
     },
     appIconPath: desktopIconPath(),
     cloudflaredCacheDir: join(app.getPath('userData'), 'bin'),
+    forceCloudflareFailure: process.env.DSH_TUNNEL_FORCE_PINGGY === '1',
+    tunnelLog: (message) => console.warn(message),
     port: developmentBuild ? 43128 : 43127,
     onReconnectRequested: () => {
       void showMobilePairing().catch(showUnexpectedError)
-    }
+    },
+    onConnectedChange: (connected) => broadcastMobileStatus(connected)
   })
   if (!startInSafeMode) void mobileBridge.start().catch(showUnexpectedError)
   ipcMain.handle('directory-picker:open', async (event) => {
@@ -1523,6 +2058,15 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle('mobile:status', () => ({ connected: mobileBridge.snapshot().connected }))
   ipcMain.handle('harness:show-log', () => {
     shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
+  })
+  ipcMain.handle('harness:open-in-finder', async (event, path?: unknown) => {
+    assertTrustedMainWindowEvent(event)
+    if (typeof path !== 'string' || path.length === 0) {
+      throw new Error('A directory path is required.')
+    }
+    const errorMessage = await shell.openPath(path)
+    if (errorMessage) throw new Error(errorMessage)
+    return { ok: true }
   })
   ipcMain.removeHandler('harness:open-recovery')
   ipcMain.handle('harness:open-recovery', async (event, frontendErrorMessage?: unknown) => {
@@ -1548,20 +2092,27 @@ async function bootstrap(): Promise<void> {
     return { ok: false }
   })
   ipcMain.removeHandler('safe-mode:action')
-  ipcMain.handle('safe-mode:action', (event, action: unknown, plugins: unknown) => {
+  ipcMain.handle('safe-mode:action', (event, action: unknown, selection: unknown) => {
     assertTrustedSafeModeManagerEvent(event)
     if (
       !safeModeVisible ||
       !safeModeManagerVisible ||
-      (action !== 'uninstall' && action !== 'agent' && action !== 'restart' && action !== 'quit')
+      (action !== 'apply' && action !== 'agent' && action !== 'restart' && action !== 'quit')
     ) {
       return { ok: false }
     }
-    if (action === 'uninstall') {
-      if (!Array.isArray(plugins) || !plugins.every((plugin) => typeof plugin === 'string')) {
+    if (action === 'apply') {
+      if (typeof selection !== 'object' || selection === null) return { ok: false }
+      const { plugins, issues } = selection as { plugins?: unknown; issues?: unknown }
+      if (
+        !Array.isArray(plugins) ||
+        !plugins.every((plugin) => typeof plugin === 'string') ||
+        !Array.isArray(issues) ||
+        !issues.every((issue) => typeof issue === 'string')
+      ) {
         return { ok: false }
       }
-      resolveSafeModeAction({ type: 'uninstall', plugins })
+      resolveSafeModeAction({ type: 'apply', plugins, issues })
     } else {
       resolveSafeModeAction({ type: action })
     }
@@ -1580,11 +2131,21 @@ async function bootstrap(): Promise<void> {
     return { ok: true }
   })
   ipcMain.removeHandler('safe-mode:exit')
-  ipcMain.handle('safe-mode:exit', (event) => {
+  ipcMain.handle('safe-mode:exit', async (event) => {
     assertTrustedMainWindowEvent(event)
     if (!safeModeVisible) return { ok: false }
+    const dshHome = join(app.getPath('userData'), 'harness')
+    const compatibility = await inspectProfileCompatibility(
+      dshHome,
+      join(app.getAppPath(), 'node_modules')
+    )
+    if (compatibility.issues.some((issue) => issue.severity === 'blocking')) {
+      void showSafeModeManager().catch(showUnexpectedError)
+      return { ok: false, blocked: true }
+    }
     resolveSafeModeAction({ type: 'agent' })
-    void launchHarness().then(() => mobileBridge.start()).catch(showUnexpectedError)
+    await launchHarness()
+    void mobileBridge.start().catch(showUnexpectedError)
     return { ok: true }
   })
   ipcMain.removeHandler('harness:reset-plugins')
@@ -1608,6 +2169,8 @@ async function bootstrap(): Promise<void> {
     startUpdateManager({
       prepareToInstall: async () => {
         await runtime.stop()
+        const dshHome = join(app.getPath('userData'), 'harness')
+        await quarantineInstalledLaunchAgentsForUpdate(dshHome)
         quitting = true
         stopUpdateManager()
       }
@@ -1624,6 +2187,8 @@ if (isDaemonLaunch(process.env, process.platform)) {
 } else {
   configureAppIdentity()
   configureApplicationLocale()
+  configureGpuFallback()
+  installGpuFallbackWatch()
   const singleInstance = app.requestSingleInstanceLock()
   if (!singleInstance) {
     app.quit()
@@ -1664,6 +2229,10 @@ if (isDaemonLaunch(process.env, process.platform)) {
       event.preventDefault()
       quitting = true
       stopUpdateManager()
+      // Windows leaves the tray icon behind as a ghost until the user hovers
+      // over it unless it is destroyed explicitly before the process exits.
+      if (tray && !tray.isDestroyed()) tray.destroy()
+      tray = undefined
       void Promise.all([runtime.stop(), mobileBridge?.stop()]).finally(() => app.quit())
     })
   }
