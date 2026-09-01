@@ -1,0 +1,201 @@
+# loong64 (新世界/ABI2.0) automated release for DSH Desktop.
+#
+# This workflow lives ONLY on the fork's loong64 branch (sendlan/dsh-desktop),
+# so upstream merges never conflict with it and we never open PRs against
+# upstream. It mirrors the old local systemd builder but runs entirely on GitHub
+# hosted x86 runners: it does not compile on a LoongArch host. Instead it
+# downloads the community loong64 electron binary (darkyzhou/electron-loong64),
+# builds the app with electron-vite, and packages the .deb with the pure-JS
+# @loongdotjs/electron-builder port (arch-independent: an x86 runner can emit an
+# Architecture=loong64 .deb). Only the "new world" loong64 (ABI2.0) is produced;
+# the "old world" loongarch64 (ABI1.0) is intentionally not shipped.
+#
+# Triggers:
+#   - workflow_dispatch (manual, easiest way to run now)
+#   - schedule (daily 03:35, replaces the local systemd timer)
+#   - release published on the fork (so re-running after a manual tag works)
+#
+# All changes stay in the fork; upstream repository and its release.yml are never
+# modified.
+
+name: loong64 release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '35 3 * * *'
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: loong64-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout fork loong64 (full history for merges)
+        uses: actions/checkout@v4
+        with:
+          ref: loong64
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Sync upstream main into fork main, then merge into loong64
+        run: |
+          set -Eeuo pipefail
+          UPSTREAM_REMOTE=upstream
+          REMOTE=origin
+          MAIN_BRANCH=main
+          BRANCH=loong64
+          UPSTREAM_REPO="${UPSTREAM_REPO:-dataelement/dsh-desktop}"
+          GITHUB_REPOSITORY="${GITHUB_REPOSITORY:?}"
+
+          git remote add "$UPSTREAM_REMOTE" "https://github.com/${UPSTREAM_REPO}.git"
+          git config --global user.name  'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --prune "$UPSTREAM_REMOTE" main
+          git fetch --prune "$REMOTE" main "$BRANCH"
+
+          # --- 1. fork main = exact mirror of upstream/main (never touch upstream) ---
+          git checkout -B "$MAIN_BRANCH" "$UPSTREAM_REMOTE/main"
+          upstream_main_sha="$(git rev-parse HEAD)"
+          git push "$REMOTE" "$MAIN_BRANCH"
+
+          # --- 2. loong64 gets the newly synchronized fork main (auto-merge) ---
+          git checkout "$BRANCH"
+          git fetch --prune "$REMOTE" "$BRANCH"
+          local_head="$(git rev-parse HEAD)"
+          fork_loong="$(git rev-parse "$REMOTE/$BRANCH")"
+          # fast-forward to fork remote unless a pending local commit exists
+          if ! git merge-base --is-ancestor "$local_head" "$fork_loong"; then
+            echo "local $BRANCH ahead of $REMOTE/$BRANCH; preserving local state"
+          else
+            [ "$local_head" = "$fork_loong" ] || git merge --ff-only "$REMOTE/$BRANCH"
+          fi
+          git reset --hard "$fork_loong"
+          if ! git merge-base --is-ancestor "$REMOTE/$MAIN_BRANCH" HEAD; then
+            echo "merging $REMOTE/$MAIN_BRANCH into $BRANCH"
+            if ! git merge --no-edit "$REMOTE/$MAIN_BRANCH"; then
+              echo "merge conflict detected; auto-resolving"
+              conflict="$(git diff --name-only --diff-filter=U)"
+              for f in $conflict; do
+                # loong64-owner files must never be overwritten by upstream
+                case "$f" in
+                  scripts/loong64-*.sh|scripts/vendor/landlock-main.c|.github/workflows/loong64-*.yml)
+                    echo "CONFLICT on loong64-owner file: $f -> FAIL (manual fix required)"
+                    exit 90
+                    ;;
+                  package-lock.json)
+                    echo "resolving $f (keep loong64 side, regenerated later)"
+                    git checkout --ours -- "$f"
+                    ;;
+                  *)
+                    echo "resolving $f (accept upstream)"
+                    git checkout --theirs -- "$f"
+                    ;;
+                esac
+                git add "$f"
+              done
+              git commit --no-edit
+            fi
+          fi
+          # push the merge back to the fork loong64 branch
+          git push "$REMOTE" "$BRANCH"
+
+          # --- 3. refresh lockfile to match upstream deps ---
+          npm install --package-lock-only --legacy-peer-deps --ignore-scripts \
+            --no-audit --no-fund --registry=https://registry.npmjs.org/
+          if ! git diff --quiet -- package-lock.json; then
+            git add package-lock.json
+            git commit -m "fix: sync lockfile with upstream dependencies"
+            git push "$REMOTE" "$BRANCH"
+          fi
+
+      - name: Detect latest upstream release tag
+        id: tag
+        run: |
+          set -Eeuo pipefail
+          for attempt in 1 2 3 4 5; do
+            tag="$(curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 \
+                'https://api.github.com/repos/dataelement/dsh-desktop/releases?per_page=30' \
+              | node -e '
+                let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+                  try{const a=JSON.parse(s);
+                    const r=(Array.isArray(a)?a:[]).find(x=>!x.draft&&!x.prerelease&&/^v0\.\d+\.\d+$/.test(x.tag_name));
+                    if(r)console.log(r.tag_name); else process.exit(2);
+                  }catch(e){process.exit(3)}
+                })')" || true
+            if [ -n "$tag" ]; then echo "tag=$tag" >> "$GITHUB_OUTPUT"; break; fi
+            echo "query attempt $attempt failed; retrying"; sleep 10
+          done
+          : "${tag:?could not resolve upstream release after retries}"
+
+      - name: Skip if this tag already has a loong64 deb published
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          needs_build=1
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+              | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+                 const a=JSON.parse(s).assets||[]; console.log(a.some(x=>/loong64\.deb$/.test(x.name))?"yes":"no")})' \
+              | grep -qx yes; then
+              needs_build=0
+            fi
+          fi
+          echo "needs_build=$needs_build" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        if: steps.check.outputs.needs_build == '1'
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+
+      - name: Build loong64 .deb (release-synced name)
+        id: build
+        if: steps.check.outputs.needs_build == '1'
+        run: |
+          set -euo pipefail
+          ./scripts/loong64-package.sh "$PWD" "${{ steps.check.outputs.tag }}"
+
+      - name: Publish loong64 deb to fork release
+        if: steps.check.outputs.needs_build == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          tag="${{ steps.check.outputs.tag }}"
+          deb="$(ls "$PWD"/dist/dsh-desktop-*-loong64.deb | head -1)"
+          test -n "$deb" && test -f "$deb"
+          # ensure the git tag exists in the fork (pointing at current loong64)
+          tag_sha="$(git rev-parse HEAD)"
+          if ! git rev-parse -q "refs/tags/$tag" >/dev/null; then
+            curl -fsSL -X POST -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/git/refs" \
+              -d "{\"ref\":\"refs/tags/$tag\",\"sha\":\"$tag_sha\"}"
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "$deb" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" "$deb" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "DSH Desktop $tag" \
+              --notes "LoongArch64 (新世界 loong64/ABI2.0) build of DSH Desktop $tag." \
+              --generate-notes
+          fi
+          echo "Published $tag -> $(basename "$deb")"
