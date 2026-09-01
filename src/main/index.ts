@@ -47,6 +47,7 @@ import {
   gpuFallbackStateEquals,
   gpuFallbackSwitches,
   isGpuLossFatal,
+  isRendererGpuFallbackCandidate,
   parseGpuFallbackState,
   planGpuFallbackResponse,
   planStableLaunch,
@@ -174,6 +175,7 @@ let profileBootConfirmationTimer: NodeJS.Timeout | undefined
 let profileRendererHealthAt = 0
 let profileBootNavigationVersion = 0
 let profileBootConfirmationComplete = false
+let safeModeSuspectedPlugins: string[] = []
 // A renderer that crashes (render-process-gone) and reloads that fails the
 // same way produces a permanent black window the user has to close by hand.
 // The cooldown keeps reloads from stacking up when the underlying crash
@@ -348,6 +350,19 @@ function installMainWindowRendererRecovery(window: BrowserWindow): void {
     const reason = details?.reason ?? 'unknown'
     const exitCode = details?.exitCode ?? -1
     recordMainWindowRendererLoss('render-process-gone', `reason=${reason} exitCode=${exitCode}`)
+    // `did-finish-load` can win the race by milliseconds before a broken
+    // graphics stack takes the renderer down. The first post-render crash is
+    // allowed the normal bounded reload; if that freshly reloaded renderer
+    // dies with the same native signature, the launch is still unusable and
+    // must take the same immediate relaunch path as a pre-render GPU loss.
+    const unusableLaunch = !harnessRendered || mainWindowRecoveryReloadCount > 0
+    if (
+      isRendererGpuFallbackCandidate({ platform: process.platform, reason, exitCode }) &&
+      respondToGpuFallbackSignal(
+        `renderer native crash: reason=${reason} exitCode=${exitCode}`,
+        { unusableLaunch }
+      )
+    ) return
     reloadMainWindowAfterRendererLoss(window)
   })
   webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -739,26 +754,45 @@ function installGpuFallbackWatch(): void {
     // Chromium tears the GPU process down on shutdown and Electron reports it
     // here like any other loss; degrading on that would degrade everyone.
     if (!isGpuLossFatal(details.reason)) return
-    if (gpuStableLaunchTimer) {
-      clearTimeout(gpuStableLaunchTimer)
-      gpuStableLaunchTimer = undefined
-    }
-    runtime?.note(
-      `[desktop] GPU process gone: reason=${details.reason} exitCode=${details.exitCode} ` +
-        `fallback=${gpuFallbackState.level} failures=${gpuFallbackState.failures}`
+    respondToGpuFallbackSignal(
+      `GPU process gone: reason=${details.reason} exitCode=${details.exitCode}`
     )
-    const plan = planGpuFallbackResponse({ state: gpuFallbackState, harnessRendered })
-    const escalated = plan.state.level !== gpuFallbackState.level
-    if (!gpuFallbackStateEquals(plan.state, gpuFallbackState)) {
-      gpuFallbackState = plan.state
-      writeGpuFallbackState(plan.state)
-    }
-    if (escalated) runtime?.note(`[desktop] GPU fallback raised to ${plan.state.level}`)
-    if (!plan.relaunch) return
-    gpuFallbackRelaunching = true
-    app.relaunch()
-    app.exit(0)
   })
+}
+
+/**
+ * Feed one high-confidence graphics failure into the shared fallback ladder.
+ * Returning true tells a renderer-loss caller that a relaunch is already in
+ * progress, so it must not also reload the dying WebContents.
+ */
+function respondToGpuFallbackSignal(
+  details: string,
+  options: { unusableLaunch?: boolean } = {}
+): boolean {
+  if (gpuFallbackRelaunching || quitting) return false
+  if (gpuStableLaunchTimer) {
+    clearTimeout(gpuStableLaunchTimer)
+    gpuStableLaunchTimer = undefined
+  }
+  runtime?.note(
+    `[desktop] ${details} fallback=${gpuFallbackState.level} ` +
+      `failures=${gpuFallbackState.failures}`
+  )
+  const plan = planGpuFallbackResponse({
+    state: gpuFallbackState,
+    harnessRendered: options.unusableLaunch === true ? false : harnessRendered
+  })
+  const escalated = plan.state.level !== gpuFallbackState.level
+  if (!gpuFallbackStateEquals(plan.state, gpuFallbackState)) {
+    gpuFallbackState = plan.state
+    writeGpuFallbackState(plan.state)
+  }
+  if (escalated) runtime?.note(`[desktop] GPU fallback raised to ${plan.state.level}`)
+  if (!plan.relaunch) return false
+  gpuFallbackRelaunching = true
+  app.relaunch()
+  app.exit(0)
+  return true
 }
 
 function configureApplicationLocale(): void {
@@ -1187,6 +1221,7 @@ function launchHarness(): Promise<void> {
         }
       }
     }
+    if (runtime.snapshot().phase === 'ready') safeModeSuspectedPlugins = []
   })().finally(() => {
     harnessLaunchOperation = undefined
   })
@@ -1623,6 +1658,7 @@ async function showPluginRecovery(options?: {
         shell.showItemInFolder(join(app.getPath('logs'), 'harness.log'))
         continue
       } else if (action === 'safe-mode') {
+        safeModeSuspectedPlugins = [...new Set(detection.plugins)]
         takePendingFrontendPluginRecovery()
         queueMicrotask(() => void showSafeMode().catch(showUnexpectedError))
         return
@@ -1654,6 +1690,7 @@ async function showRuntimeFailure(snapshot: RuntimeSnapshot): Promise<void> {
 
 async function waitForSafeModeAction(options: {
   plugins: readonly string[]
+  suspectedPlugins: readonly string[]
   issues: readonly ProfileCompatibilityIssue[]
   backups: Awaited<ReturnType<typeof snapshotPluginRemovalLedger>>['backups']
   recoveryLocked: boolean
@@ -1704,6 +1741,7 @@ async function waitForSafeModeAction(options: {
   const model = buildSafeModeViewModel({
     locale: harnessLocale(),
     plugins: options.plugins,
+    suspectedPlugins: options.suspectedPlugins,
     issues: options.issues,
     backups: options.backups,
     recoveryLocked: options.recoveryLocked,
@@ -1943,6 +1981,7 @@ async function showSafeModeManager(initial?: {
       const backupRestoreLocked = recoveryLocked || !removalLedgerReadable
       const action = await waitForSafeModeAction({
         plugins: installed,
+        suspectedPlugins: safeModeSuspectedPlugins,
         issues: compatibility.issues,
         backups: removalBackups.backups,
         recoveryLocked,
@@ -2134,6 +2173,8 @@ async function showSafeModeManager(initial?: {
         if (!removal.disabled) failedPlugins.push(plugin)
         else if (removal.pending) pendingPlugins.push(plugin)
       }
+      const disabledPlugins = new Set(selectedPlugins.filter((plugin) => !failedPlugins.includes(plugin)))
+      safeModeSuspectedPlugins = safeModeSuspectedPlugins.filter((plugin) => !disabledPlugins.has(plugin))
       const failed = repairFailures + failedPlugins.length
       notice = pendingPlugins.length > 0
         ? isChinese
