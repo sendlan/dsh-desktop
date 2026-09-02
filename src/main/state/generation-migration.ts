@@ -165,8 +165,11 @@ async function migrationPlan(dshHome: string, plugins: readonly string[]): Promi
     } catch {
       throw new Error(`${name} has no readable installed package manifest`)
     }
-    const version = installedManifest.version
-    if (typeof version !== 'string') throw new Error(`${name} has no installed version`)
+    const rawVersion = installedManifest.version
+    const version =
+      typeof rawVersion === 'string' && rawVersion.trim() !== ''
+        ? rawVersion.trim()
+        : '0.0.0'
     const declared = manifest.dependencies?.[name]
     const sourceSpec = typeof declared === 'string' ? declared : `${name}@${version}`
     planned.push({
@@ -506,7 +509,7 @@ async function rewriteManifest(dshHome: string): Promise<void> {
   for (const [name, spec] of Object.entries(snapshot.dependencies ?? {})) {
     if (KEEP_IN_SHARED_TREE.has(name)) keptDeps[name] = spec as string
   }
-  if (keptDeps.dshmarket === undefined) keptDeps.dshmarket = '^1.35.0'
+  if (keptDeps.dshmarket === undefined) keptDeps.dshmarket = '^1.40.0'
 
   // Bundles are left to projection, which runs next and knows the generations.
   // Here we only trim to the shared-tree packages and keep in-box bundles.

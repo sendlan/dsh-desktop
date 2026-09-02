@@ -113,7 +113,7 @@ describe('Safe Mode', () => {
       { name: 'plugin-a', actionLabel: '卸载插件', incompatible: false, suspected: false }
     ])
     expect(model.issueGroups[0]).toMatchObject({
-      name: 'Profile 核心依赖',
+      name: 'Profile',
       kindLabel: 'Profile',
       issueIds: ['core-version-mismatch:@deepseek-ai/example']
     })
@@ -247,11 +247,10 @@ describe('Safe Mode', () => {
     expect(html).toContain('checkbox.dataset.issueIds')
     expect(html).toContain("document.createElement('details')")
     expect(html).toContain("window.dshSafeMode.action('agent', {})")
-    expect(html).toContain("window.dshSafeMode.action('backup-open', { removalId:")
-    expect(html).toContain("window.dshSafeMode.action('backup-restore', { removalId:")
-    expect(html).toContain("window.dshSafeMode.action('backup-delete', { removalId:")
-    expect(html).toContain('backup.cleanupReady !== true')
-    expect(html).toContain('id="backup-card"')
+    expect(html).not.toContain('id="backup-card"')
+    expect(html).not.toContain("window.dshSafeMode.action('backup-open'")
+    expect(html).not.toContain("window.dshSafeMode.action('backup-restore'")
+    expect(html).not.toContain("window.dshSafeMode.action('backup-delete'")
     expect(html).toContain('id="recovery-open"')
     expect(html).toContain('class="close" id="agent"')
     expect(html).toContain('class="button primary" id="restart"')
