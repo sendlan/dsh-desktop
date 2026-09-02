@@ -58,7 +58,6 @@ jobs:
           MAIN_BRANCH=main
           BRANCH=loong64
           UPSTREAM_REPO="${UPSTREAM_REPO:-dataelement/dsh-desktop}"
-          GITHUB_REPOSITORY="${GITHUB_REPOSITORY:?}"
 
           git remote add "$UPSTREAM_REMOTE" "https://github.com/${UPSTREAM_REPO}.git"
           git config --global user.name  'github-actions[bot]'
@@ -69,7 +68,11 @@ jobs:
           # --- 1. fork main = exact mirror of upstream/main (never touch upstream) ---
           git checkout -B "$MAIN_BRANCH" "$UPSTREAM_REMOTE/main"
           upstream_main_sha="$(git rev-parse HEAD)"
-          git push "$REMOTE" "$MAIN_BRANCH"
+          # push may fail if the fork's GITHUB_TOKEN lacks "workflows" permission
+          # (GitHub blocks Actions bots from updating workflow files). This is
+          # non-fatal: even if fork/main stays stale, we still merge the latest
+          # upstream/main directly into loong64 in the next step.
+          git push "$REMOTE" "$MAIN_BRANCH" || echo "::warning::could not push main (workflows permission missing); loong64 merge will use upstream/main directly"
 
           # --- 2. loong64 gets the newly synchronized fork main (auto-merge) ---
           git checkout "$BRANCH"
