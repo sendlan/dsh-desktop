@@ -318,6 +318,10 @@ describe('GitHub release contract', () => {
       'utf8'
     )
     const main = await readFile(path.join(projectRoot, 'src', 'main', 'index.ts'), 'utf8')
+    const targetVerifier = await readFile(
+      path.join(projectRoot, 'scripts', 'verify-target.mjs'),
+      'utf8'
+    )
 
     expect(packageJson.scripts['package:dev:dir']).toContain('npm run build')
     expect(packageJson.scripts['package:dev:dir']).toContain('electron-builder.dev.cjs')
@@ -341,6 +345,9 @@ describe('GitHub release contract', () => {
     expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop-dev'))")
     expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop'))")
     expect(main).toContain('if (!developmentBuild)')
+    expect(targetVerifier).toContain("resolve('node_modules', 'node', 'bin', executable)")
+    expect(targetVerifier).toContain('Bundled Node.js runtime was not found or is not executable')
+    expect(targetVerifier).toContain('spawnSync')
   })
 
   it('builds and publishes every supported platform', async () => {

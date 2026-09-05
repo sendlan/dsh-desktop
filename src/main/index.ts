@@ -30,7 +30,7 @@ import {
   clearProfileInstallMarker,
   markProfileInstallComplete
 } from './state/profile-install-marker'
-import { inspectProfileConsistency } from './state/profile-consistency'
+import { healProfileBundles, inspectProfileConsistency } from './state/profile-consistency'
 import {
   disableProfilePlugins,
   inspectProfileCompatibility,
@@ -102,6 +102,10 @@ import {
   shouldLoadHarnessUrl
 } from './window-navigation'
 import {
+  DesktopStorageManager,
+  type DesktopStorageAction
+} from './state/desktop-storage'
+import {
   raiseWindowWithoutStealingFocus,
   type WindowFocusIntent
 } from './window-raise'
@@ -122,6 +126,15 @@ import {
 } from '../shared/desktop-menu'
 import { buildPluginRecoveryViewModel } from './plugin-recovery-view'
 import { buildSafeModeViewModel, shouldStartInSafeMode } from './safe-mode'
+import {
+  checkupAllProfilePlugins,
+  evaluatePluginMarketCompatibility,
+  readBundledDshVersion,
+  readInstalledPluginVersion,
+  type PluginHealthReport,
+  type PluginUpgradeCandidate
+} from './state/plugin-market-check'
+import { upgradePluginToGeneration } from './state/plugin-upgrade'
 import { aboutDetail, bundledHarnessVersion } from './version-info'
 import { windowsMenuViewBounds } from './windows-menu-view'
 import { shouldKeepRunningInBackground } from './close-to-tray'
@@ -130,9 +143,10 @@ import {
   shouldReloadAfterMainWindowRendererLoss
 } from './main-window-recovery'
 
-type PluginRecoveryAction = 'uninstall' | 'show-log' | 'quit' | 'restart' | 'refresh' | 'safe-mode'
+type PluginRecoveryAction = 'uninstall' | 'upgrade' | 'show-log' | 'quit' | 'restart' | 'refresh' | 'safe-mode'
 type SafeModeAction =
   | { type: 'apply'; plugins: string[]; issues: string[] }
+  | { type: 'upgrade'; plugins: string[] }
   | { type: 'recovery-open' }
   | { type: 'backup-open'; removalId: string }
   | { type: 'backup-restore'; removalId: string }
@@ -143,6 +157,7 @@ type SafeModeAction =
 
 const PLUGIN_RECOVERY_ACTIONS = new Set<PluginRecoveryAction>([
   'uninstall',
+  'upgrade',
   'show-log',
   'quit',
   'restart',
@@ -156,6 +171,7 @@ let windowsMenuDark = false
 let mobileWindow: BrowserWindow | undefined
 let tray: Tray | undefined
 let runtime: HarnessRuntime
+let desktopStorageManager: DesktopStorageManager | undefined
 let mobileBridge: LanMobileBridge
 let launchDirectory: string
 let quitting = false
@@ -919,6 +935,7 @@ function createWindow(): BrowserWindow {
     window.setMenuBarVisibility(false)
   }
   window.on('close', (event) => {
+    desktopStorageManager?.flushSync()
     if (!shouldKeepRunningInBackground(process.platform, quitting)) return
     event.preventDefault()
     window.hide()
@@ -1019,6 +1036,10 @@ async function showSplash(): Promise<void> {
  */
 async function reportProfileConsistency(dshHome: string): Promise<void> {
   try {
+    const healed = await healProfileBundles(dshHome)
+    if (healed.length > 0) {
+      runtime.note(`[desktop] auto-composed ${healed.length} missing bundle(s): ${healed.join(', ')}`)
+    }
     const findings = await inspectProfileConsistency(dshHome)
     const store = await inspectStoreConsistency(dshHome)
     if (store) findings.push(store)
@@ -1204,6 +1225,7 @@ function launchHarness(): Promise<void> {
     maintenanceAllowedRestoreId = undefined
     await refreshMigrationRecoveryLock(dshHome)
     await auditInstalledLaunchAgents(dshHome)
+    desktopStorageManager?.switchProfile(join(dshHome, 'profiles', 'web'))
     await runtime.start(launchDirectory)
 
     // A failed launch must not rewrite the user's enabled plugin set. Recovery
@@ -1246,6 +1268,7 @@ function launchSafeHarness(): Promise<void> {
     await runtime.stop()
     await ensureSafeModeProfile(dshHome)
     runtime.note('[desktop] safe mode: third-party web profile bundles are blocked')
+    desktopStorageManager?.switchProfile(join(dshHome, 'profiles', SAFE_MODE_PROFILE))
     await runtime.start(launchDirectory, SAFE_MODE_PROFILE)
     if (runtime.snapshot().phase === 'ready') {
       void mobileBridge.start().catch(showUnexpectedError)
@@ -1288,6 +1311,18 @@ async function uninstallMarketAndRestart(): Promise<{ ok: boolean }> {
 }
 
 function registerHarnessHandlers(): void {
+  ipcMain.removeAllListeners('dsh:storage-load-sync')
+  ipcMain.on('dsh:storage-load-sync', (event) => {
+    event.returnValue = desktopStorageManager?.getAll() ?? {}
+  })
+
+  ipcMain.removeAllListeners('dsh:storage-sync')
+  ipcMain.on('dsh:storage-sync', (_event, action) => {
+    if (action && typeof action === 'object') {
+      desktopStorageManager?.applyAction(action as DesktopStorageAction)
+    }
+  })
+
   ipcMain.removeHandler('harness:restart')
   ipcMain.handle('harness:restart', async (event) => {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
@@ -1525,6 +1560,7 @@ async function waitForPluginRecoveryAction(options: {
   plugins: readonly string[]
   removedPlugins: readonly string[]
   notice?: string
+  upgradeCandidate?: PluginUpgradeCandidate
 }): Promise<PluginRecoveryAction> {
   const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
   const state = buildPluginRecoveryViewModel({
@@ -1588,6 +1624,8 @@ async function showPluginRecovery(options?: {
     return true
   }
 
+  const attemptedUpgrades = new Map<string, string>()
+
   try {
     while (!quitting) {
       const snapshot = runtime.snapshot()
@@ -1603,6 +1641,37 @@ async function showPluginRecovery(options?: {
       appendPluginRecoveryDetectionLog(detection.plugins)
       waitForRendererEvidence = false
       if (applyPendingFrontendEvidence()) continue
+
+      let upgradeCandidate: PluginUpgradeCandidate | undefined
+      if (detection.plugins.length === 1) {
+        const targetPlugin = detection.plugins[0]!
+        try {
+          const installedVersion = await readInstalledPluginVersion(dshHome, targetPlugin)
+          const runtimeVersion =
+            (await readBundledDshVersion(join(app.getAppPath(), 'node_modules'))) || '0.1.2-alpha.1'
+          const check = await evaluatePluginMarketCompatibility({
+            packageName: targetPlugin,
+            installedVersion,
+            currentRuntimeVersion: runtimeVersion,
+            hasLocalIssue: true,
+            locale: harnessLocale()
+          })
+          if (
+            check.upgradeReady &&
+            check.upgradeVersion &&
+            attemptedUpgrades.get(targetPlugin) !== check.upgradeVersion
+          ) {
+            upgradeCandidate = {
+              packageName: targetPlugin,
+              targetVersion: check.upgradeVersion,
+              installedVersion
+            }
+          }
+        } catch (error) {
+          runtime.note(`[plugin-recovery] market check failed for ${targetPlugin}: ${String(error)}`)
+        }
+      }
+
       const action = await waitForPluginRecoveryAction({
         snapshot: {
           ...snapshot,
@@ -1611,12 +1680,58 @@ async function showPluginRecovery(options?: {
         },
         plugins: detection.plugins,
         removedPlugins,
-        notice
+        notice,
+        upgradeCandidate
       })
       notice = undefined
 
       if (action === 'refresh') {
         applyPendingFrontendEvidence()
+        continue
+      } else if (action === 'upgrade' && upgradeCandidate) {
+        await runtime.stop()
+        const upgradeResult = await upgradePluginToGeneration({
+          dshHome,
+          pluginName: upgradeCandidate.packageName,
+          targetVersion: upgradeCandidate.targetVersion,
+          nodeExecutablePath: bundledNodePath(),
+          pnpmEntryPath: bundledPnpmEntryPath(),
+          note: (line) => runtime.note(line)
+        })
+        attemptedUpgrades.set(upgradeCandidate.packageName, upgradeCandidate.targetVersion)
+
+        if (!upgradeResult.ok) {
+          notice = isChinese
+            ? `升级 ${upgradeCandidate.packageName} 到 v${upgradeCandidate.targetVersion} 失败：${upgradeResult.detail ?? '未知错误'}。您可以重试或卸载该插件。`
+            : `Failed to upgrade ${upgradeCandidate.packageName} to v${upgradeCandidate.targetVersion}: ${upgradeResult.detail ?? 'unknown error'}. You may retry or uninstall.`
+          continue
+        }
+
+        const compatibility = await inspectProfileCompatibility(
+          dshHome,
+          join(app.getAppPath(), 'node_modules')
+        )
+        const blockingIssues = compatibility.issues.filter((issue) => issue.severity === 'blocking')
+        if (blockingIssues.length > 0) {
+          runtime.note(
+            `[plugin-recovery] normal mode remains blocked by ${blockingIssues.length} ` +
+            `profile compatibility issue${blockingIssues.length === 1 ? '' : 's'} after upgrade`
+          )
+          notice = isChinese
+            ? `已升级至 v${upgradeCandidate.targetVersion}，但 Profile 仍有 ${blockingIssues.length} 项兼容问题。` +
+            '为避免再次进入空白界面，请进入安全模式继续处理。'
+            : `Upgraded to v${upgradeCandidate.targetVersion}, but ${blockingIssues.length} blocking profile compatibility ` +
+            `issue${blockingIssues.length === 1 ? ' remains' : 's remain'}. ` +
+            'Continue in Safe Mode to avoid another blank normal window.'
+          continue
+        }
+
+        await launchHarness()
+        if (applyPendingFrontendEvidence()) continue
+        if (runtime.snapshot().phase === 'ready') {
+          schedulePluginRecoverySessionReset()
+          return
+        }
         continue
       } else if (action === 'uninstall' && detection.plugins.length > 0) {
         // The normal web Harness may still have the failing plugin imported.
@@ -1726,6 +1841,7 @@ async function waitForSafeModeAction(options: {
   plugins: readonly string[]
   suspectedPlugins: readonly string[]
   issues: readonly ProfileCompatibilityIssue[]
+  healthReports?: readonly PluginHealthReport[]
   backups: Awaited<ReturnType<typeof snapshotPluginRemovalLedger>>['backups']
   recoveryLocked: boolean
   backupRestoreLocked: boolean
@@ -1777,6 +1893,7 @@ async function waitForSafeModeAction(options: {
     plugins: options.plugins,
     suspectedPlugins: options.suspectedPlugins,
     issues: options.issues,
+    healthReports: options.healthReports,
     backups: options.backups,
     recoveryLocked: options.recoveryLocked,
     backupRestoreLocked: options.backupRestoreLocked,
@@ -2001,6 +2118,24 @@ async function showSafeModeManager(initial?: {
         noticeTone ??= 'error'
       }
       const installed = [...new Set([...active, ...pendingRemovals])]
+      let healthReports: PluginHealthReport[] | undefined
+      if (installed.length > 0 && !recoveryLocked) {
+        try {
+          const incompatiblePluginNames = compatibility.issues
+            .filter((issue) => issue.resolution === 'disable-plugin')
+            .map((issue) => issue.target)
+          healthReports = await checkupAllProfilePlugins({
+            plugins: installed,
+            dshHome,
+            bundledNodeModulesPath: join(app.getAppPath(), 'node_modules'),
+            incompatiblePlugins: [...new Set([...safeModeSuspectedPlugins, ...incompatiblePluginNames])],
+            locale: harnessLocale()
+          })
+        } catch (error) {
+          runtime.note(`[safe-mode] plugin market health checkup failed: ${String(error)}`)
+        }
+      }
+
       const allowedRestoreId = recoveryLocked &&
         !migrationRecoveryLocked &&
         removalLedgerReadable &&
@@ -2017,6 +2152,7 @@ async function showSafeModeManager(initial?: {
         plugins: installed,
         suspectedPlugins: safeModeSuspectedPlugins,
         issues: compatibility.issues,
+        healthReports,
         backups: removalBackups.backups,
         recoveryLocked,
         backupRestoreLocked,
@@ -2165,6 +2301,57 @@ async function showSafeModeManager(initial?: {
         }
         void mobileBridge.start().catch(showUnexpectedError)
         return
+      }
+
+      if (action.type === 'upgrade') {
+        if (await refreshMigrationRecoveryLock(dshHome)) {
+          notice = isChinese ? 'Profile 恢复事务完成前禁止升级插件。' : 'Plugins cannot be upgraded until the recovery transaction completes.'
+          noticeTone = 'error'
+          continue
+        }
+        const reportsByPkg = new Map((healthReports ?? []).map((r) => [r.packageName, r]))
+        const targets = action.plugins.filter((pkg) => {
+          const report = reportsByPkg.get(pkg)
+          return report?.upgradeReady && report.upgradeVersion
+        })
+
+        if (targets.length === 0) {
+          notice = isChinese ? '所选插件没有可升级的兼容版本。' : 'No compatible upgrade candidate found for selected plugins.'
+          noticeTone = 'error'
+          continue
+        }
+
+        let upgradedCount = 0
+        const failedPackages: string[] = []
+        for (const pkg of targets) {
+          const report = reportsByPkg.get(pkg)!
+          const res = await upgradePluginToGeneration({
+            dshHome,
+            pluginName: pkg,
+            targetVersion: report.upgradeVersion!,
+            nodeExecutablePath: bundledNodePath(),
+            pnpmEntryPath: bundledPnpmEntryPath(),
+            note: (line) => runtime.note(line)
+          })
+          if (res.ok) {
+            upgradedCount++
+          } else {
+            failedPackages.push(pkg)
+          }
+        }
+
+        if (failedPackages.length === 0) {
+          notice = isChinese
+            ? `成功升级 ${upgradedCount} 个插件。`
+            : `Successfully upgraded ${upgradedCount} plugin${upgradedCount === 1 ? '' : 's'}.`
+          noticeTone = 'success'
+        } else {
+          notice = isChinese
+            ? `成功升级 ${upgradedCount} 个插件，${failedPackages.length} 个升级失败（${failedPackages.join('、')}）。`
+            : `Upgraded ${upgradedCount} plugin${upgradedCount === 1 ? '' : 's'}; ${failedPackages.length} failed (${failedPackages.join(', ')}).`
+          noticeTone = 'error'
+        }
+        continue
       }
 
       if (await refreshMigrationRecoveryLock(dshHome)) {
@@ -2410,6 +2597,12 @@ async function bootstrap(): Promise<void> {
   registerUpdateHandlers()
   nativeTheme.themeSource = harnessThemePreference()
   ensureTray()
+  const dshHome = join(app.getPath('userData'), 'harness')
+  desktopStorageManager = new DesktopStorageManager(join(dshHome, 'profiles', 'web'), {
+    onError: (error, context) => {
+      console.warn(`[desktop-storage] error during ${context}:`, error)
+    }
+  })
   createWindow()
   runtime = new HarnessRuntime({
     dshEntryPath: dshEntryPath(),
@@ -2522,6 +2715,7 @@ async function bootstrap(): Promise<void> {
       !safeModeManagerVisible ||
       (
         action !== 'apply' &&
+        action !== 'upgrade' &&
         action !== 'recovery-open' &&
         action !== 'backup-open' &&
         action !== 'backup-restore' &&
@@ -2535,7 +2729,7 @@ async function bootstrap(): Promise<void> {
     }
     await refreshMigrationRecoveryLock(join(app.getPath('userData'), 'harness'))
     if (
-      (action === 'apply' || action === 'backup-delete') && profileRecoveryLocked()
+      (action === 'apply' || action === 'upgrade' || action === 'backup-delete') && profileRecoveryLocked()
     ) return { ok: false }
     if (action === 'apply') {
       if (typeof selection !== 'object' || selection === null) return { ok: false }
@@ -2549,6 +2743,16 @@ async function bootstrap(): Promise<void> {
         return { ok: false }
       }
       resolveSafeModeAction({ type: 'apply', plugins, issues })
+    } else if (action === 'upgrade') {
+      if (typeof selection !== 'object' || selection === null) return { ok: false }
+      const { plugins } = selection as { plugins?: unknown }
+      if (
+        !Array.isArray(plugins) ||
+        !plugins.every((plugin) => typeof plugin === 'string')
+      ) {
+        return { ok: false }
+      }
+      resolveSafeModeAction({ type: 'upgrade', plugins })
     } else if (
       action === 'backup-open' ||
       action === 'backup-restore' ||
@@ -2692,6 +2896,7 @@ if (isDaemonLaunch(process.env, process.platform)) {
       if (quitting || !runtime) return
       event.preventDefault()
       quitting = true
+      desktopStorageManager?.flushSync()
       stopUpdateManager()
       // Windows leaves the tray icon behind as a ghost until the user hovers
       // over it unless it is destroyed explicitly before the process exits.
