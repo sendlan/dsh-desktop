@@ -2,6 +2,11 @@ node_modules/
 out/
 dist/
 dist-dev/
+# loong64 branch: propagate tarballs (rg/landlock) are committed inputs so
+# package.json file: deps resolve on fresh clones; the rest (extracted node,
+# built platform dirs) is generated fresh by scripts/loong64-setup.sh
+platform-pkgs/*
+!platform-pkgs/*.tgz
 .DS_Store
 *.log
 coverage/
