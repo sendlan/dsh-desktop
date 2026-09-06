@@ -115,6 +115,36 @@ jobs:
           # push the merge back to the fork loong64 branch
           git push "$REMOTE" "$BRANCH"
 
+          # --- 2.5 ensure the loong64-only deps survive upstream merges ---
+          # package.json is resolved as "accept upstream" on conflict, which could
+          # drop the loong64-only dependencies (node runtime pin, vendored rg and
+          # landlock file: deps, sharp wasm32 fallback). Verify they are all
+          # present with our pinned specs immediately after the merge and restore
+          # them otherwise, before the lockfile is regenerated below.
+          restored="$(node -e '
+            const fs=require("fs"); const p="package.json";
+            const want={
+              "node":"24.9.0",
+              "@deepseek-ai/node-addon-landlock-run-linux-loong64":"file:platform-pkgs/landlock.tgz",
+              "@vscode/ripgrep-linux-loong64":"file:platform-pkgs/rg.tgz",
+              "@img/sharp-wasm32":"0.35.4"
+            };
+            const j=JSON.parse(fs.readFileSync(p,"utf8"));
+            const deps=j.dependencies=j.dependencies||{};
+            let wrote=false;
+            for(const k of Object.keys(want)){
+              if(deps[k]!==want[k]){ deps[k]=want[k]; wrote=true; }
+            }
+            if(wrote){ fs.writeFileSync(p,JSON.stringify(j,null,2)+"\n"); console.log("restored"); }
+            else { console.log("ok"); }
+          ')"
+          if [ "$restored" = "restored" ]; then
+            echo "restored loong64 dependencies in package.json"
+            git add package.json
+            git commit -m "fix: restore loong64 dependencies after upstream merge"
+            git push "$REMOTE" "$BRANCH" || echo "::warning::could not push package.json restore"
+          fi
+
           # --- 3. refresh lockfile to match upstream deps ---
           npm install --package-lock-only --legacy-peer-deps --ignore-scripts \
             --no-audit --no-fund --registry=https://registry.npmjs.org/
