@@ -91,7 +91,7 @@ bootstrap_native_assets() {
         fs.readSync(fd, b, 0, 20, 0);
         fs.closeSync(fd);
         if (b[0] !== 0x7f || b[1] !== 0x45 || b[2] !== 0x4c || b[3] !== 0x46) { process.stdout.write("0"); process.exit(0); }
-        process.stdout.write((b[18] | (b[19] << 8)) === 183 ? "1" : "0");
+        process.stdout.write((b[18] | (b[19] << 8)) === 258 ? "1" : "0");
       } catch (e) { process.stdout.write("0"); }
     ' "$node_bin" 2>/dev/null)"
     if [ "$em" = "1" ]; then
@@ -121,6 +121,51 @@ bootstrap_native_assets() {
     echo "[loong64-package] placing vendored loong64 pty.node"
     mkdir -p "$(dirname "$pty_dst")"
     cp "$ROOT/scripts/vendor/pty-node-linux-loong64.node" "$pty_dst"
+  fi
+}
+
+# koffi (used by the app's native FFI layer) ships per-arch natives as
+# optionalDependencies. On the x86 CI runner npm installs only koffi-linux-x64
+# and silently skips koffi-linux-loong64, which would leave the shipped deb
+# unable to load koffi on a loong64 host. The npm registry does publish the
+# loong64 variant; fetch it here (architecture-independent) and drop it into
+# node_modules before electron-builder packs the tree.
+ensure_koffi_loong64() {
+  local dest="$ROOT/node_modules/@koromix/koffi-linux-loong64"
+  if [ -n "$(find "$dest" -name koffi.node -print -quit 2>/dev/null)" ]; then
+    echo "[loong64-package] koffi-linux-loong64 already present"
+    return 0
+  fi
+  local ver url integ
+  ver="$(node -p 'const l=require(process.argv[1]),e=l.packages?.["node_modules/@koromix/koffi-linux-loong64"];e?e.version:""' "$ROOT/package-lock.json" 2>/dev/null || true)"
+  url="$(node -p 'const l=require(process.argv[1]),e=l.packages?.["node_modules/@koromix/koffi-linux-loong64"];e?e.resolved:""' "$ROOT/package-lock.json" 2>/dev/null || true)"
+  integ="$(node -p 'const l=require(process.argv[1]),e=l.packages?.["node_modules/@koromix/koffi-linux-loong64"];e?e.integrity:""' "$ROOT/package-lock.json" 2>/dev/null || true)"
+  if [ -z "$url" ] || [ -z "$ver" ]; then
+    echo "[loong64-package] WARN: @koromix/koffi-linux-loong64 not recorded in package-lock.json; skipping" >&2
+    return 0
+  fi
+  echo "[loong64-package] fetching koffi-linux-loong64 v$ver from registry"
+  local tmp="$(mktemp -d)"
+  if ! curl -fL --retry 3 --retry-all-errors --connect-timeout 30 -o "$tmp/koffi.tgz" "$url"; then
+    echo "[loong64-package] WARN: koffi-linux-loong64 download failed" >&2
+    rm -rf "$tmp"; return 1
+  fi
+  if [ -n "$integ" ]; then
+    local computed
+    computed="sha512-$(node -e 'const c=require("crypto"),fs=require("fs");process.stdout.write(c.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64"))' "$tmp/koffi.tgz")"
+    if [ "$computed" != "$integ" ]; then
+      echo "[loong64-package] ERROR: koffi-linux-loong64 integrity mismatch (got $computed, lock $integ)" >&2
+      rm -rf "$tmp"; return 1
+    fi
+  fi
+  mkdir -p "$ROOT/node_modules/@koromix"
+  tar -xzf "$tmp/koffi.tgz" -C "$tmp"
+  mv "$tmp/package" "$dest"
+  rm -rf "$tmp"
+  if [ -z "$(find "$dest" -name koffi.node -print -quit 2>/dev/null)" ]; then
+    echo "[loong64-package] WARN: koffi-linux-loong64 extracted without koffi.node" >&2
+  else
+    echo "[loong64-package] koffi-linux-loong64 v$ver injected (integrity verified)"
   fi
 }
 
@@ -229,6 +274,7 @@ main() {
   echo "== DSH Desktop loong64 package: $(date -Is) =="
   echo "repo=$ROOT node=$(node --version)"
   bootstrap_native_assets
+  ensure_koffi_loong64
   ensure_electron
   ensure_builder
 
