@@ -231,6 +231,9 @@ ensure_electron() {
 # upstream installs / merges). This is a self-contained fallback: prefer an
 # existing system-wide install, otherwise provision it during the build.
 LOONG64_EB=""
+# Byte-exact pristine copy of build/harness-node-entry.mjs taken by
+# patch_harness_selfheal; restore_harness_entry copies it back at EXIT.
+SELFHEAL_PRISTINE=""
 ensure_builder() {
   # 1) explicit env override
   if [ -n "${LOONG64_EBUILDER:-}" ] && [ -x "$LOONG64_EBUILDER/cli.js" ]; then
@@ -270,6 +273,109 @@ restore_pkg_version() {
   node -e "const fs=require('fs');const p=process.argv[1],v=process.argv[2];let j;try{j=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){process.exit(0)}j.version=v;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')" "$p" "$v" || true
 }
 
+# The harness's shared fallback directory
+# ($DSH_HOME/profiles/node_modules) is generated per install by walking the
+# dependency closure of the `dsh` package (@deepseek-ai/dsh profile-boot
+# INSTALL_ANCHOR). App-level `file:` workspace packages that that closure does
+# not reach — dsh-desktop-client-ui, dsh-desktop-market-installer,
+# dsh-desktop-hmr-fallback, dsh-desktop-preset-transfer and
+# @deepseek-ai/dsh-experimental-kimi-ppt-standard-adapter — are therefore never
+# linked on a fresh install, and the loader's cordis:include fails with
+# "Cannot find package '...'", killing the whole plugin tree. This is an
+# upstream closure gap, not a packaging defect (the packages themselves are in
+# resources/app/node_modules). Build-time self-heal: patch
+# build/harness-node-entry.mjs (packaged via extraResources and the first code
+# the bundled harness node runs) so each fresh install links those five packages
+# into the shared fallback dir before the dsh entry loads. Idempotent: existing
+# links are left untouched, and it no-ops when DSH_HOME is unset or the fallback
+# dir does not exist yet. The file is restored afterwards so the working tree
+# never carries the patch.
+SELFHEAL_PACKAGES=(
+  "dsh-desktop-client-ui"
+  "dsh-desktop-market-installer"
+  "dsh-desktop-hmr-fallback"
+  "dsh-desktop-preset-transfer"
+  "@deepseek-ai/dsh-experimental-kimi-ppt-standard-adapter"
+)
+
+# Marker comment the self-heal patch inserts so it is idempotent and restorable.
+SELFHEAL_MARKER="loong64-selfheal-marker"
+
+# Build the self-heal block: ESM-only (the entry is a .mjs, so no require()).
+# Defined as a function so the heredoc keeps shell-expansion control.
+selfheal_js() {
+  local pkg_json="$(printf '%s\n' "${SELFHEAL_PACKAGES[@]}" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.stringify(s.trim().split('\n'))))")"
+  cat <<EOF
+// ${SELFHEAL_MARKER}: link app-level packages the dsh dependency closure does
+// not cover into the harness shared fallback dir before the dsh entry loads.
+;(async () => {
+  const dshHome = process.env.DSH_HOME
+  if (dshHome) {
+    const { existsSync, mkdirSync, symlinkSync } = await import('node:fs')
+    const { join, dirname } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const packages = ${pkg_json}
+    const appNodeModules = fileURLToPath(new URL('./app/node_modules/', import.meta.url))
+    const fallbackDir = join(dshHome, 'profiles', 'node_modules')
+    for (const packageName of packages) {
+      const target = join(appNodeModules, packageName)
+      const link = join(fallbackDir, packageName)
+      try {
+        if (!existsSync(join(target, 'package.json'))) continue
+        mkdirSync(dirname(link), { recursive: true })
+        if (!existsSync(link)) symlinkSync(target, link, 'dir')
+      } catch {
+        // best-effort; the app boots without the fallback links if it fails
+      }
+    }
+  }
+})().catch(() => {})
+EOF
+}
+
+patch_harness_selfheal() {
+  local entry="$ROOT/build/harness-node-entry.mjs"
+  [ -f "$entry" ] || { echo "[loong64-package] WARN: $entry missing; skipping self-heal patch" >&2; return 0; }
+  if grep -q "$SELFHEAL_MARKER" "$entry"; then
+    echo "[loong64-package] harness self-heal patch already applied"
+    return 0
+  fi
+  echo "[loong64-package] patching harness-node-entry.mjs with profiles self-heal"
+  # Keep a pristine copy so restore is a byte-exact copy instead of string surgery.
+  SELFHEAL_PRISTINE="$(mktemp)"
+  cp -f "$entry" "$SELFHEAL_PRISTINE"
+  local block="$(selfheal_js)"
+  node -e "
+const fs=require('fs');
+const path=process.argv[1], block=process.argv[2];
+let s=fs.readFileSync(path,'utf8');
+const anchor=\"const [dshEntryPath, ...dshArguments] = process.argv.slice(2)\";
+const at=s.indexOf(anchor);
+if(at<0){console.error('harness-node-entry anchor not found');process.exit(1)}
+s=s.slice(0,at)+block+'\n\n'+s.slice(at);
+fs.writeFileSync(path,s);
+" "$entry" "$block"
+  if ! grep -q "$SELFHEAL_MARKER" "$entry"; then
+    echo "[loong64-package] ERROR: failed to apply harness self-heal patch" >&2
+    return 1
+  fi
+  echo "[loong64-package] harness self-heal patch applied"
+}
+
+# Undo the harness self-heal patch after packaging (byte-exact restore from the
+# pristine copy taken by patch_harness_selfheal). Global SELFHEAL_PRISTINE.
+restore_harness_entry() {
+  local entry="$1"
+  [ -f "$entry" ] || return 0
+  if [ -z "$SELFHEAL_PRISTINE" ] || [ ! -f "$SELFHEAL_PRISTINE" ]; then
+    return 0
+  fi
+  cp -f "$SELFHEAL_PRISTINE" "$entry"
+  rm -f "$SELFHEAL_PRISTINE"
+  SELFHEAL_PRISTINE=""
+  echo "[loong64-package] harness-node-entry.mjs restored"
+}
+
 main() {
   echo "== DSH Desktop loong64 package: $(date -Is) =="
   echo "repo=$ROOT node=$(node --version)"
@@ -302,11 +408,21 @@ main() {
   if [ "$deb_version" != "$baked_version" ]; then
     echo "[loong64-package] baking deb version: $baked_version -> $deb_version"
     node -e "const fs=require('fs');const p=process.argv[1],v=process.argv[2];const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=v;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')" "$pkg_json" "$deb_version"
-    trap "restore_pkg_version '$pkg_json' '$baked_version'" EXIT
   fi
 
   echo "[loong64-package] building renderer/main with electron-vite"
-  ( cd "$ROOT" && npm run build )
+  ( cd "$ROOT" && npm run build ) || { echo "[loong64-package] ERROR: electron-vite build failed" >&2; exit 3; }
+
+  # Apply the harness self-heal patch before electron-builder packs extraResources.
+  # A single EXIT trap restores BOTH the baked package.json version and the
+  # pristine harness entry afterwards, so the working tree is never left dirty.
+  local harness_entry="$ROOT/build/harness-node-entry.mjs"
+  if [ "$deb_version" != "$baked_version" ]; then
+    trap "restore_pkg_version '$pkg_json' '$baked_version'; restore_harness_entry '$harness_entry'" EXIT
+  else
+    trap "restore_harness_entry '$harness_entry'" EXIT
+  fi
+  patch_harness_selfheal || { echo "[loong64-package] ERROR: harness self-heal patch failed" >&2; exit 6; }
 
   echo "[loong64-package] packaging .deb for loong64"
   ( cd "$ROOT" && node "$LOONG64_EB" --linux deb --loong64 --publish never \
