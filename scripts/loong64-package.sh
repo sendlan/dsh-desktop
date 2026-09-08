@@ -169,6 +169,25 @@ ensure_koffi_loong64() {
   fi
 }
 
+# sharp (used by dsh-ppt rendering) ships per-arch libvips as optionalDependencies.
+# There is no linux-loong64 libvips build, and sharp's loader falls back to
+# @img/sharp-wasm32 only if that package is present. The workflow pins it in the
+# root dependencies, so npm installs it. On the x86 CI runner npm also installs
+# @img/sharp-linux-x64 + @img/sharp-libvips-linux-x64, which must NOT be packed
+# into the loong64 .deb: they would be dead weight and could be misloaded. Remove
+# the x86 native sharp packages and let the deb ship only the arch-independent
+# wasm32 fallback.
+ensure_sharp_wasm32() {
+  if [ -n "$(find "$ROOT/node_modules/@img/sharp-wasm32" -maxdepth 2 -name '*.node.wasm' -print -quit 2>/dev/null)" ]; then
+    echo "[loong64-package] sharp-wasm32 present; removing x86 sharp libs from package"
+    rm -rf "$ROOT/node_modules/@img/sharp-linux-x64"            "$ROOT/node_modules/@img/sharp-libvips-linux-x64"
+    # also drop the other glibc x64-ish variants that are not loong64
+    rm -rf "$ROOT/node_modules/@img/sharp-libvips-linuxmusl-x64"
+  else
+    echo "[loong64-package] WARN: @img/sharp-wasm32 not found; sharp may fail on loong64" >&2
+  fi
+}
+
 ELECTRON_DIR="$ROOT/node_modules/electron"
 ELECTRON_DIST="$ELECTRON_DIR/dist"
 ELECTRON_BIN="$ELECTRON_DIST/electron"
@@ -383,6 +402,7 @@ main() {
   ensure_koffi_loong64
   ensure_electron
   ensure_builder
+  ensure_sharp_wasm32
 
   # Version used for the release-synced artifact name: <version> arg > $BUILD_VERSION
   # env > package.json "version".
