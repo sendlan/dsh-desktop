@@ -103,8 +103,16 @@ jobs:
                     git checkout --ours -- "$f"
                     ;;
                   *)
-                    echo "resolving $f (accept upstream)"
-                    git checkout --theirs -- "$f"
+                    # modify/delete conflicts: if upstream deleted the file
+                    # there is no stage-3 (theirs) entry, so git checkout --theirs fails.
+                    # Detect that by checking whether any unmerged entry has stage 3.
+                    if git ls-files -u -- "$f" | awk '$3==3 {found=1} END {exit !found}'; then
+                      echo "resolving $f (accept upstream)"
+                      git checkout --theirs -- "$f"
+                    else
+                      echo "resolving $f (upstream deleted; accepting deletion)"
+                      git rm -f -- "$f"
+                    fi
                     ;;
                 esac
                 git add "$f"
