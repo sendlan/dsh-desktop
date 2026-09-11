@@ -171,9 +171,13 @@ jobs:
           # unauthenticated api.github.com calls share GitHub Actions' crowded
           # runner IPs and exhaust the 60 req/hr/IP anonymous quota, returning
           # 403 with no way to retry out of it; authenticate the call instead.
+          # gh api --paginate applies the jq filter once per page and joins the
+          # pages, which makes this echo multi-line and trips the runner's
+          # "Invalid format" parser. The newest stable tag is always in the
+          # first page, so fetch it without pagination.
           for attempt in 1 2 3 4 5; do
-            tag="$(gh api --paginate 'repos/dataelement/dsh-desktop/releases?per_page=30' \
-              --jq '[.[] | select((.draft == false) and (.prerelease == false) and (.tag_name | test("^v0\\.[0-9]+\\.[0-9]+$")))][0].tag_name' \
+            tag="$(gh api 'repos/dataelement/dsh-desktop/releases?per_page=100' \
+              --jq 'first(.[] | select((.draft == false) and (.prerelease == false) and (.tag_name | test("^v0\\.[0-9]+\\.[0-9]+$"))) | .tag_name)' \
               || true)"
             if [ -n "$tag" ]; then echo "tag=$tag" >> "$GITHUB_OUTPUT"; break; fi
             echo "query attempt $attempt failed; retrying"; sleep 10
