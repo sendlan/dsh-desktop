@@ -297,8 +297,9 @@ restore_pkg_version() {
 # dependency closure of the `dsh` package (@deepseek-ai/dsh profile-boot
 # INSTALL_ANCHOR). App-level `file:` workspace packages that that closure does
 # not reach — dsh-desktop-client-ui, dsh-desktop-market-installer,
-# dsh-desktop-hmr-fallback, dsh-desktop-preset-transfer and
-# @deepseek-ai/dsh-experimental-kimi-ppt-standard-adapter — are therefore never
+# dsh-desktop-hmr-fallback, dsh-desktop-preset-transfer and dsh-ppt-composer
+# (upstream renamed the Kimi adapter @deepseek-ai/dsh-experimental-kimi-ppt-
+# standard-adapter to dsh-ppt-composer in 0.8.0) — are therefore never
 # linked on a fresh install, and the loader's cordis:include fails with
 # "Cannot find package '...'", killing the whole plugin tree. This is an
 # upstream closure gap, not a packaging defect (the packages themselves are in
@@ -314,7 +315,7 @@ SELFHEAL_PACKAGES=(
   "dsh-desktop-market-installer"
   "dsh-desktop-hmr-fallback"
   "dsh-desktop-preset-transfer"
-  "@deepseek-ai/dsh-experimental-kimi-ppt-standard-adapter"
+  "dsh-ppt-composer"
 )
 
 # Marker comment the self-heal patch inserts so it is idempotent and restorable.
