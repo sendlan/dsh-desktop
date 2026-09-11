@@ -164,18 +164,17 @@ jobs:
 
       - name: Detect latest upstream release tag
         id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
+          # unauthenticated api.github.com calls share GitHub Actions' crowded
+          # runner IPs and exhaust the 60 req/hr/IP anonymous quota, returning
+          # 403 with no way to retry out of it; authenticate the call instead.
           for attempt in 1 2 3 4 5; do
-            tag="$(curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 \
-                'https://api.github.com/repos/dataelement/dsh-desktop/releases?per_page=30' \
-              | node -e '
-                let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-                  try{const a=JSON.parse(s);
-                    const r=(Array.isArray(a)?a:[]).find(x=>!x.draft&&!x.prerelease&&/^v0\.\d+\.\d+$/.test(x.tag_name));
-                    if(r)console.log(r.tag_name); else process.exit(2);
-                  }catch(e){process.exit(3)}
-                })')" || true
+            tag="$(gh api --paginate 'repos/dataelement/dsh-desktop/releases?per_page=30' \
+              --jq '[.[] | select((.draft == false) and (.prerelease == false) and (.tag_name | test("^v0\\.[0-9]+\\.[0-9]+$")))][0].tag_name' \
+              || true)"
             if [ -n "$tag" ]; then echo "tag=$tag" >> "$GITHUB_OUTPUT"; break; fi
             echo "query attempt $attempt failed; retrying"; sleep 10
           done
