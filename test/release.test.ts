@@ -10,6 +10,9 @@ const releaseAssets = [
   'dsh-desktop-windows-x64-setup.exe'
 ]
 
+/** The exact Harness build every `@deepseek-ai/dsh-*` production dep is pinned to. */
+const HARNESS_VERSION = '0.1.5-rc.2'
+
 describe('GitHub release contract', () => {
   it('keeps the package and lockfile versions aligned', async () => {
     const packageJson = JSON.parse(
@@ -59,11 +62,12 @@ describe('GitHub release contract', () => {
       'utf8'
     )
     const packageLock = JSON.parse(packageLockRaw) as {
-      packages: Record<string, { resolved?: string }>
+      packages: Record<string, { resolved?: string; integrity?: string }>
     }
 
-    // alpha.3 introduced these as transitive deps of shipped packages; they must
-    // resolve from the vendored tarballs, not registry.npmmirror.com.
+    // alpha.3 introduced these as transitive deps of shipped packages; they are
+    // explicit production deps so the lockfile pins them like the rest of the
+    // closure instead of letting a transitive range float.
     const promotedClosurePackages = [
       '@deepseek-ai/dsh-client-ui-schedule',
       '@deepseek-ai/dsh-deque',
@@ -73,18 +77,26 @@ describe('GitHub release contract', () => {
     ]
 
     for (const packageName of promotedClosurePackages) {
-      expect(packageJson.dependencies[packageName]).toMatch(
-        /^file:packages\/harness-0\.1\.2-rc\.1\/npm-dsh\/.+\.tgz$/
-      )
-      expect(packageLock.packages[`node_modules/${packageName}`]?.resolved).toMatch(
-        /^file:packages\/harness-0\.1\.2-rc\.1\/npm-dsh\//
-      )
+      expect(packageJson.dependencies[packageName]).toBe(HARNESS_VERSION)
     }
 
-    // No @deepseek-ai/dsh-* package may resolve from a remote registry URL.
-    expect(packageLockRaw).not.toMatch(
-      /"resolved":\s*"https?:\/\/[^"]*deepseek-ai[/-]dsh/
+    // Upstream publishes the official CI build to the registry, so every
+    // `@deepseek-ai/dsh-*` dep is pinned to one exact version and every
+    // resolution carries an integrity hash — `npm ci` stays reproducible
+    // without vendoring tarballs into the repository.
+    const harnessDeps = Object.entries(packageJson.dependencies).filter(
+      ([name]) => name.startsWith('@deepseek-ai/dsh')
     )
+    expect(harnessDeps.length).toBeGreaterThan(200)
+    for (const [name, range] of harnessDeps) {
+      expect(range, name).toBe(HARNESS_VERSION)
+      const entry = packageLock.packages[`node_modules/${name}`]
+      expect(entry?.resolved, name).toMatch(/^https?:\/\//)
+      expect(entry?.integrity, name).toMatch(/^sha\d+-/)
+    }
+
+    // The vendored-tarball layout is gone; nothing may resolve from it.
+    expect(packageLockRaw).not.toMatch(/file:packages\/harness-/)
   })
 
   it('does not promote optional Harness providers and test support into the desktop runtime', async () => {
@@ -144,7 +156,7 @@ describe('GitHub release contract', () => {
       build: {
         artifactName: string
         extraResources: Array<{ from: string; to: string }>
-        win: { target: Array<{ target: string; arch: string[] }> }
+        win: { target: Array<{ target: string; arch: string[] }>; requestedExecutionLevel?: string }
         nsis: { artifactName: string; include: string }
         portable?: unknown
       }
@@ -193,11 +205,16 @@ describe('GitHub release contract', () => {
       from: 'build/dsh-desktop-safe.patch.yml',
       to: 'dsh-desktop-safe.patch.yml'
     })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/web-import.html',
+      to: 'web-import.html'
+    })
     expect(packageJson.build.nsis.artifactName).toBe(
       'dsh-desktop-windows-${arch}-setup.${ext}'
     )
     expect(packageJson.build.nsis.include).toBe('build/installer.nsh')
     expect(packageJson.build.win.target).toEqual([{ target: 'nsis', arch: ['x64'] }])
+    expect(packageJson.build.win.requestedExecutionLevel).toBe('asInvoker')
     expect(packageJson.build.portable).toBeUndefined()
   })
 
@@ -403,7 +420,7 @@ describe('GitHub release contract', () => {
       workflow.match(
         /npm version --no-git-tag-version --allow-same-version "\$\{\{ github\.ref_name \}\}"/g
       )
-    ).toHaveLength(3)
+    ).toHaveLength(4)
   })
 
   it('signs and notarizes both macOS architectures on tag releases', async () => {
@@ -456,6 +473,9 @@ describe('GitHub release contract', () => {
     expect(workflow).not.toContain('security find-generic-password')
     expect(workflow).not.toContain('WINDOWS_SIGNING_KEYCHAIN_SERVICE')
     expect(workflow).toContain('finalize-windows-release.mjs')
+    expect(workflow).toContain('sign-windows-unpacked.mjs')
+    expect(workflow).toContain('win-unpacked.tar.gz')
+    expect(workflow).toContain('--prepackaged')
     // Version comes from the pre-release input on a dispatch, else the tag ref.
     expect(workflow).toContain('version="${PRERELEASE_TAG:-${GITHUB_REF_NAME#v}}"')
     expect(workflow).toContain('pattern: macos-*')

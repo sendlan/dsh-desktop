@@ -174,6 +174,37 @@ describe('diagnostic event integration', () => {
     expect(queued(service, dir).map(r => r.kind).sort()).toEqual(['gpu-crash', 'main-crash', 'renderer-crash'])
     app.emit('will-quit'); expect(existsSync(join(dir, 'state', 'session.json'))).toBe(false)
   })
+  it('suppresses unclean-exit report when previous session was healthy', () => {
+    const { service, options, dir } = fixture()
+    writeFileSync(options.logPath, '[desktop] endpoint http://127.0.0.1:43129\n[desktop] Harness is ready\n[desktop] cleared 1 stale Harness authentication cookie(s)\n')
+    service.beginSession()
+    const next = new DesktopService(options)
+    next.beginSession()
+    expect(next.pending()).toHaveLength(0)
+  })
+  it('discards a pending report by eventId', () => {
+    const { service } = fixture()
+    const eventId = service.capture('startup-failure', 'recoverable error')
+    expect(service.pending()).toHaveLength(1)
+    expect(service.discard(eventId)).toBe(true)
+    expect(service.pending()).toHaveLength(0)
+  })
+  it('discards transient plugin failure report when recovery succeeds and runtime reaches ready', async () => {
+    const { service, dir } = fixture()
+    const app = new EventEmitter()
+    const diagnostics = attachDiagnostics(app, service); disposers.push(() => diagnostics.dispose())
+    const failedSnapshot = {
+      phase: 'failed' as const,
+      message: 'plugin error',
+      logs: [],
+      pluginFailures: [{ stage: 'import' as const, packageName: 'test-plugin', message: 'failed', chain: [] }]
+    }
+    diagnostics.runtimeChanged(failedSnapshot, async () => {})
+    await vi.waitFor(() => expect(service.pending()).toHaveLength(1))
+    // User or safe mode recovers and launches successfully
+    diagnostics.runtimeChanged({ phase: 'ready', message: 'ready', logs: [] }, async () => {})
+    expect(service.pending()).toHaveLength(0)
+  })
 })
 
 it('waits for the actual Harness file stream before capturing its final error', async () => {
@@ -183,6 +214,22 @@ it('waits for the actual Harness file stream before capturing its final error', 
   for (let n = 0; n < 150; n++) runtime.note(`error ${n}`)
   await runtime.flushLog()
   const lines = tailLog(options.logPath).lines
-  expect(lines).toHaveLength(100); expect(lines[0]).toBe('error 50'); expect(lines.at(-1)).toBe('error 149')
+  expect(lines).toHaveLength(100); expect(lines[0]).toContain('error 50'); expect(lines.at(-1)).toContain('error 149')
+  await runtime.stop()
+})
+
+it('formats harness.log with ISO date timestamps and relative elapsed time', async () => {
+  const { HarnessRuntime } = await import('../src/main/runtime/harness-runtime')
+  const { dir, options } = fixture()
+  const runtime = new HarnessRuntime({ dshEntryPath: '', nodeExecutablePath: '', nodeEntryPath: '', dshPatchPath: '', dshSafePatchPath: '', dshHome: dir, logPath: options.logPath, launchProcess: () => { throw new Error('Not used') }, onChanged: () => {} })
+  runtime.note('pre-launch message')
+  runtime.beginLaunch('test reason')
+  runtime.note('post-launch message')
+  await runtime.flushLog()
+  const lines = tailLog(options.logPath).lines
+  expect(lines[0]).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] pre-launch message$/)
+  expect(lines[1]).toBe('')
+  expect(lines[2]).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]\s+\+\s*\d+ms \[desktop\] launch requested \(test reason\)$/)
+  expect(lines[3]).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]\s+\+\s*\d+ms post-launch message$/)
   await runtime.stop()
 })
