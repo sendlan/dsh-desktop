@@ -2965,6 +2965,7 @@ async function bootstrap(): Promise<void> {
   ipcMain.removeHandler('harness:open-recovery')
   ipcMain.handle('harness:open-recovery', async (event, frontendErrorMessage?: unknown) => {
     assertTrustedMainWindowEvent(event)
+    desktopDiagnostics?.discardPendingPluginFailure()
     const message = typeof frontendErrorMessage === 'string' ? frontendErrorMessage : undefined
     if (message) appendRendererPluginFailureLog(message)
     const logs = [...rendererPluginFailureLogs]
@@ -3128,6 +3129,9 @@ async function bootstrap(): Promise<void> {
         const dshHome = join(app.getPath('userData'), 'harness')
         await quarantineInstalledLaunchAgentsForUpdate(dshHome)
         quitting = true
+        // NSIS may force-kill before will-quit; clear the marker so the next
+        // launch does not treat this intentional update as an unclean-exit.
+        desktopDiagnostics?.markCleanExit()
         stopUpdateManager()
       }
     })
