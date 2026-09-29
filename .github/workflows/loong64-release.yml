@@ -102,6 +102,10 @@ jobs:
                     echo "resolving $f (keep loong64 side, regenerated later)"
                     git checkout --ours -- "$f"
                     ;;
+                  platform-pkgs/*.tgz)
+                    echo "resolving $f (keep loong64 prebuilt tarball)"
+                    git checkout --ours -- "$f"
+                    ;;
                   *)
                     # modify/delete conflicts: if upstream deleted the file
                     # there is no stage-3 (theirs) entry, so git checkout --theirs fails.
@@ -134,6 +138,7 @@ jobs:
             const want={
               "node":"24.9.0",
               "@deepseek-ai/node-addon-landlock-run-linux-loong64":"file:platform-pkgs/landlock.tgz",
+              "@deepseek-ai/node-addon-system-linux-loong64":"file:platform-pkgs/system.tgz",
               "@vscode/ripgrep-linux-loong64":"file:platform-pkgs/rg.tgz",
               "@img/sharp-wasm32":"0.35.4"
             };

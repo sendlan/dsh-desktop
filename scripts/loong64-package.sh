@@ -189,6 +189,49 @@ ensure_sharp_wasm32() {
   fi
 }
 
+# node-addon-system loong64 (Landlock launcher + Node-API flock). Upstream dsh
+# >= 0.9.0 depends on @deepseek-ai/node-addon-system, whose per-arch packages
+# carry both the Landlock launcher (bin/landlock-run) and the Node-API flock
+# addon (bin/<libc>/system.node). npm publishes no linux-loong64 variant, so an
+# x86 build that installs the umbrella package ships no flock addon and every
+# session write fails with "Cannot find module
+# '@deepseek-ai/node-addon-system-linux-loong64/package.json'" (resolved lazily
+# from node-addon-system/lib/flock.js, i.e. only when a session is created).
+# Inject the prebuilt package from the committed platform-pkgs/system.tgz
+# (assembled from node-addon-system/src/flock.c by scripts/loong64-setup.sh on a
+# loong64 host) and drop the x64 prebuild npm installed on the CI runner.
+SYSTEM_ADDON_REL="@deepseek-ai/node-addon-system-linux-loong64"
+ensure_system_addon_loong64() {
+  local dest="$ROOT/node_modules/$SYSTEM_ADDON_REL"
+  if [ -f "$dest/bin/glibc/system.node" ]; then
+    echo "[loong64-package] $SYSTEM_ADDON_REL already present"
+  else
+    local tgz="$ROOT/platform-pkgs/system.tgz"
+    if [ ! -f "$tgz" ]; then
+      echo "[loong64-package] WARN: $tgz missing; loong64 flock/landlock addon will be absent" >&2
+    else
+      echo "[loong64-package] injecting $SYSTEM_ADDON_REL from platform-pkgs/system.tgz"
+      local tmp="$(mktemp -d)"
+      tar -xzf "$tgz" -C "$tmp"
+      mkdir -p "$(dirname "$dest")"
+      rm -rf "$dest"
+      mv "$tmp/package" "$dest"
+      rm -rf "$tmp"
+    fi
+  fi
+  # The umbrella package's optionalDependencies pull the x64 prebuild (and any
+  # other host variants) into node_modules on the x86 runner; they are dead
+  # weight in a loong64 .deb and are never resolved there.
+  rm -rf "$ROOT/node_modules/@deepseek-ai/node-addon-system-linux-x64" \
+         "$ROOT/node_modules/@deepseek-ai/node-addon-system-linux-arm64" \
+         "$ROOT/node_modules/@deepseek-ai/node-addon-system-darwin-arm64" \
+         "$ROOT/node_modules/@deepseek-ai/node-addon-system-darwin-x64"
+  [ -f "$dest/bin/glibc/system.node" ] || {
+    echo "[loong64-package] ERROR: $SYSTEM_ADDON_REL missing after injection" >&2
+    return 1
+  }
+}
+
 ELECTRON_DIR="$ROOT/node_modules/electron"
 ELECTRON_DIST="$ELECTRON_DIR/dist"
 ELECTRON_BIN="$ELECTRON_DIST/electron"
@@ -405,6 +448,7 @@ main() {
   ensure_electron
   ensure_builder
   ensure_sharp_wasm32
+  ensure_system_addon_loong64
 
   # Version used for the release-synced artifact name: <version> arg > $BUILD_VERSION
   # env > package.json "version".

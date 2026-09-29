@@ -277,6 +277,7 @@
     "electron-updater": "^6.8.9",
     "node": "24.9.0",
     "@deepseek-ai/node-addon-landlock-run-linux-loong64": "file:platform-pkgs/landlock.tgz",
+    "@deepseek-ai/node-addon-system-linux-loong64": "file:platform-pkgs/system.tgz",
     "@img/sharp-wasm32": "0.35.4",
     "@vscode/ripgrep-linux-loong64": "file:platform-pkgs/rg.tgz",
     "pnpm": "10.34.5",

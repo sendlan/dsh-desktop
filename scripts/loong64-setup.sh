@@ -94,6 +94,66 @@ cat > "$PKGS/landlock-loong64/package.json" <<EOF
 EOF
 info "landlock-run: $(file -b "$PKGS/landlock-loong64/bin/landlock-run" | cut -d, -f1-2)"
 
+# ---- node-addon-system loong64 (Landlock launcher + Node-API flock) ----
+# Upstream dsh >= 0.9.0 replaced the standalone @deepseek-ai/node-addon-landlock-run
+# with @deepseek-ai/node-addon-system, whose per-arch packages carry BOTH the
+# Landlock launcher (bin/landlock-run) and the Node-API flock addon
+# (bin/<libc>/system.node). npm publishes no linux-loong64 variant (the umbrella
+# package's optionalDependencies list only x64/arm64), so on a loong64 host the
+# harness's `require.resolve('@deepseek-ai/node-addon-system-linux-loong64/
+# package.json')` fails and every session write dies with "Cannot find module
+# ... system.node". Build the flock addon natively here and assemble the package;
+# the committed platform-pkgs/system.tgz lets the x86 CI cross-package it (see
+# scripts/loong64-package.sh).
+SYSTEM_PKG="$PKGS/system-loong64"
+SYSTEM_NODE="$SYSTEM_PKG/bin/glibc/system.node"
+FLOCK_SRC="$ROOT/node_modules/@deepseek-ai/node-addon-system/src/flock.c"
+if [ ! -f "$SYSTEM_NODE" ]; then
+  if [ ! -f "$FLOCK_SRC" ]; then
+    echo "[loong64-setup] WARN: $FLOCK_SRC not found; flock addon not built" >&2
+  else
+    HDR="$PKGS/node-pkg/include/node"
+    [ -f "$HDR/node_api.h" ] || HDR="$ROOT/node_modules/koffi/vendor/node-api-headers/include"
+    if [ ! -f "$HDR/node_api.h" ]; then
+      echo "[loong64-setup] ERROR: Node-API headers not found (need $PKGS/node-pkg/include/node/node_api.h)" >&2
+      exit 1
+    fi
+    info "building node-addon-system flock addon (glibc)..."
+    mkdir -p "$SYSTEM_PKG/bin/glibc"
+    gcc -O2 -fPIC -shared -I"$HDR" -o "$SYSTEM_NODE" "$FLOCK_SRC"
+  fi
+else
+  info "system flock addon already present; skipping build"
+fi
+if [ -f "$SYSTEM_NODE" ]; then
+  mkdir -p "$SYSTEM_PKG/bin"
+  cp -f "$PKGS/landlock-loong64/bin/landlock-run" "$SYSTEM_PKG/bin/landlock-run"
+  SYS_VER="$("$PKGS/node-pkg/bin/node" -p "require('$ROOT/node_modules/@deepseek-ai/node-addon-system/package.json').version" 2>/dev/null || echo 0.1.2)"
+  cat > "$SYSTEM_PKG/package.json" <<EOF
+{
+  "name": "@deepseek-ai/node-addon-system-linux-loong64",
+  "version": "${SYS_VER}",
+  "description": "Linux loong64 system binaries: static Landlock launcher and glibc Node-API flock addon",
+  "os": ["linux"],
+  "cpu": ["loong64"],
+  "files": ["README.md", "bin/", "prebuilds.json"],
+  "engines": { "node": ">=20" },
+  "license": "BSD-3-Clause",
+  "publishConfig": { "access": "public" }
+}
+EOF
+  cat > "$SYSTEM_PKG/prebuilds.json" <<EOF
+{
+  "platform": "linux-loong64",
+  "binaries": [
+    { "tool": "landlock-run", "kind": "static-musl", "path": "bin/landlock-run" },
+    { "tool": "flock", "kind": "node-api", "napi": 8, "libc": "glibc", "path": "bin/glibc/system.node" }
+  ]
+}
+EOF
+  info "node-addon-system-linux-loong64 assembled (v$SYS_VER)"
+fi
+
 # npm copies file: deps into node_modules before preinstall runs, so the
 # binaries land in platform-pkgs after the copy. Sync them into node_modules
 # (no-op when npm install has not been run yet).
@@ -107,6 +167,7 @@ sync_binaries() {
 sync_binaries "$PKGS/node-pkg" "$ROOT/node_modules/node"
 sync_binaries "$PKGS/ripgrep-loong64" "$ROOT/node_modules/@vscode/ripgrep-linux-loong64"
 sync_binaries "$PKGS/landlock-loong64" "$ROOT/node_modules/@deepseek-ai/node-addon-landlock-run-linux-loong64"
+sync_binaries "$PKGS/system-loong64" "$ROOT/node_modules/@deepseek-ai/node-addon-system-linux-loong64"
 
 # ---- native addons (node-pty, koffi) built against the bundled loong64 node ----
 NODE_BIN="$PKGS/node-pkg/bin/node"
@@ -146,6 +207,7 @@ pack_tgz() {
 }
 pack_tgz "$PKGS/ripgrep-loong64" "$PKGS/rg.tgz"
 pack_tgz "$PKGS/landlock-loong64" "$PKGS/landlock.tgz"
-info "repacked platform-pkgs/rg.tgz + platform-pkgs/landlock.tgz"
+pack_tgz "$PKGS/system-loong64" "$PKGS/system.tgz"
+info "repacked platform-pkgs/rg.tgz + platform-pkgs/landlock.tgz + platform-pkgs/system.tgz"
 
 info "done. platform packages ready under platform-pkgs/"
